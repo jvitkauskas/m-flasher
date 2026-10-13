@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- macOS app icon grid: an 824-point rounded square, centered -->
+  <defs>
+    <linearGradient id="body" x2="0" y2="1">
+      <stop stop-color="#332b27"/>
+      <stop offset="1" stop-color="#1f1a17"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)" filter="url(#shadow)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="#7be8bb" stroke-opacity="0.35" stroke-width="6"/>
+  <!-- the wordmark's M (Saira Expanded Black Italic), cut into 6 stripes -->
+  <clipPath id="stripes"><rect x="0" y="256.0" width="1024" height="41.2"/><rect x="0" y="316.6" width="1024" height="41.2"/><rect x="0" y="377.1" width="1024" height="41.2"/><rect x="0" y="437.7" width="1024" height="41.2"/><rect x="0" y="498.3" width="1024" height="41.2"/><rect x="0" y="558.8" width="1024" height="41.2"/></clipPath>
+  <text x="500" y="600" text-anchor="middle" font-family="Saira Wordmark" font-size="500" fill="#7be8bb" clip-path="url(#stripes)">M</text>
+  <g>
+    <rect x="232" y="690" width="58" height="58" rx="8" fill="#a8445f"/>
+    <rect x="302" y="690" width="58" height="58" rx="8" fill="#4fd6c4"/>
+    <rect x="372" y="690" width="58" height="58" rx="8" fill="#4fd6c4"/>
+    <rect x="442" y="690" width="58" height="58" rx="8" fill="#4fd6c4"/>
+    <rect x="512" y="690" width="58" height="58" rx="8" fill="#e2c48f"/>
+    <rect x="582" y="690" width="58" height="58" rx="8" fill="#e2c48f"/>
+    <rect x="652" y="690" width="58" height="58" rx="8" fill="#c8742e"/>
+    <rect x="722" y="690" width="58" height="58" rx="8" fill="#d97a8a"/>
+    <rect x="232" y="760" width="58" height="58" rx="8" fill="#4fd6c4"/>
+    <rect x="302" y="760" width="58" height="58" rx="8" fill="#4fd6c4"/>
+    <rect x="372" y="760" width="58" height="58" rx="8" fill="#4fd6c4"/>
+    <rect x="442" y="760" width="58" height="58" rx="8" fill="#e2c48f"/>
+    <rect x="512" y="760" width="58" height="58" rx="8" fill="#6f8fd6"/>
+    <rect x="582" y="760" width="58" height="58" rx="8" fill="#c8742e"/>
+    <rect x="652" y="760" width="58" height="58" rx="8" fill="#c8742e"/>
+    <rect x="722" y="760" width="58" height="58" rx="8" fill="#8a8a8a"/>
+  </g>
+</svg>

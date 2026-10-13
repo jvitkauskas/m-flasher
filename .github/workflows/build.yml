@@ -1,0 +1,167 @@
+name: build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  linux:
+    # built on 22.04: the binaries run on glibc 2.35 and newer
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust (if the image lacks it)
+        run: |
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+      - run: cargo test --release
+      - run: cargo build --release
+      - name: Package
+        run: |
+          mkdir -p pkg/m-flasher
+          cp target/release/m-flasher linux/70-m-flasher.rules linux/m-flasher.png linux/README.txt LICENSE pkg/m-flasher/
+          tar -C pkg -czf m-flasher-linux-${{ matrix.arch }}.tar.gz m-flasher
+          ls -l target/release/m-flasher m-flasher-linux-${{ matrix.arch }}.tar.gz
+          file target/release/m-flasher
+      - uses: actions/upload-artifact@v7
+        with:
+          name: m-flasher-linux-${{ matrix.arch }}
+          path: m-flasher-linux-${{ matrix.arch }}.tar.gz
+      - name: Packages (.deb, .rpm)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NFPM_VERSION: 2.48.0
+        run: |
+          case "${{ matrix.arch }}" in x86_64) pkg=amd64 nfpm=x86_64 ;; aarch64) pkg=arm64 nfpm=arm64 ;; esac
+          gh release download "v$NFPM_VERSION" --repo goreleaser/nfpm --pattern "nfpm_${NFPM_VERSION}_Linux_$nfpm.tar.gz" --pattern checksums.txt
+          sha256sum --check --ignore-missing checksums.txt
+          tar -xzf "nfpm_${NFPM_VERSION}_Linux_$nfpm.tar.gz" nfpm
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          NFPM=$PWD/nfpm linux/package/build.sh "$v" "$pkg" dist
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: m-flasher-linux-${{ matrix.arch }}-packages
+          path: dist/*
+
+  packages-test:
+    # each package installed with the distribution's own package manager
+    needs: linux
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04, image: 'debian:12', pkg: deb }
+          - { arch: x86_64, runner: ubuntu-24.04, image: 'debian:13', pkg: deb, lint: lintian }
+          - { arch: x86_64, runner: ubuntu-24.04, image: 'ubuntu:22.04', pkg: deb }
+          - { arch: x86_64, runner: ubuntu-24.04, image: 'ubuntu:24.04', pkg: deb }
+          - { arch: x86_64, runner: ubuntu-24.04, image: 'fedora:latest', pkg: rpm, lint: rpmlint }
+          - { arch: x86_64, runner: ubuntu-24.04, image: 'almalinux:10', pkg: rpm }
+          - { arch: x86_64, runner: ubuntu-24.04, image: 'opensuse/leap:16.0', pkg: rpm }
+          - { arch: x86_64, runner: ubuntu-24.04, image: 'opensuse/tumbleweed', pkg: rpm }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, image: 'debian:12', pkg: deb }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, image: 'ubuntu:24.04', pkg: deb }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, image: 'fedora:latest', pkg: rpm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: m-flasher-linux-${{ matrix.arch }}-packages
+          path: dist
+      - name: Install and run in ${{ matrix.image }}
+        run: docker run --rm -v "$PWD:/w" -w /w '${{ matrix.image }}' linux/package/test-install.sh dist/*.${{ matrix.pkg }}
+      - name: Lint
+        if: matrix.lint == 'lintian'
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w '${{ matrix.image }}' sh -c \
+            'apt-get update -qq && apt-get install -y -qq lintian >/dev/null && lintian --fail-on error --tag-display-limit 0 dist/*.deb'
+      - name: Lint
+        if: matrix.lint == 'rpmlint'
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w '${{ matrix.image }}' sh -c \
+            'dnf install -y -q rpmlint >/dev/null && rpmlint dist/*.rpm'
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo test --release
+      - run: cargo build --release
+      - name: Package
+        # a zip: browsers warn about downloading a bare unsigned .exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory pkg | Out-Null
+          Copy-Item target/release/m-flasher.exe pkg/M-Flasher.exe
+          Copy-Item windows/README.txt, LICENSE pkg/
+          Compress-Archive pkg/* M-Flasher-windows.zip
+          Get-Item pkg/M-Flasher.exe, M-Flasher-windows.zip | Format-Table Name, Length
+      - uses: actions/upload-artifact@v7
+        with:
+          name: M-Flasher-windows
+          path: M-Flasher-windows.zip
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup target add x86_64-apple-darwin
+      - run: cargo test --release
+      - name: Build for Apple silicon and Intel
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          lipo -create -output m-flasher target/aarch64-apple-darwin/release/m-flasher target/x86_64-apple-darwin/release/m-flasher
+          lipo -info m-flasher
+          otool -L m-flasher
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: The app and the disk image
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          macos/package.sh m-flasher "$v" dist
+          mv dist/M-Flasher-$v-macos.dmg M-Flasher-macos.dmg
+      - uses: actions/upload-artifact@v7
+        with:
+          name: M-Flasher-macos
+          path: M-Flasher-macos.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, packages-test, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          merge-multiple: true
+      - name: Name the files after the version
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          mv M-Flasher-windows.zip M-Flasher-$v-windows.zip
+          mv m-flasher-linux-x86_64.tar.gz m-flasher-$v-linux-x86_64.tar.gz
+          mv m-flasher-linux-aarch64.tar.gz m-flasher-$v-linux-aarch64.tar.gz
+          mv M-Flasher-macos.dmg M-Flasher-$v-macos.dmg
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            M-Flasher-*-windows.zip
+            m-flasher-*-linux-x86_64.tar.gz
+            m-flasher-*-linux-aarch64.tar.gz
+            m-flasher_*.deb
+            m-flasher-*.rpm
+            M-Flasher-*-macos.dmg

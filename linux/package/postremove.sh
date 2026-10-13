@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload 2>/dev/null || true
+fi
+exit 0

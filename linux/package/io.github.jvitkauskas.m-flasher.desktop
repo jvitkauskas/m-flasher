@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=M-Flasher
+GenericName=Synthesizer Firmware Flasher
+Comment=Back up, restore and reinstall the firmware of an M-VAVE FM-1 or SMK-37
+Exec=m-flasher
+Icon=io.github.jvitkauskas.m-flasher
+Terminal=false
+Categories=Utility;
+Keywords=M-VAVE;FM-1;SMK-37;firmware;bootloader;backup;flash;
+StartupWMClass=io.github.jvitkauskas.m-flasher

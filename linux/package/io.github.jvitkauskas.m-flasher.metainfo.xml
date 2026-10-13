@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.jvitkauskas.m-flasher</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT AND OFL-1.1</project_license>
+  <name>M-Flasher</name>
+  <summary>Back up, restore and reinstall the firmware of M-VAVE synthesizers</summary>
+  <developer id="io.github.jvitkauskas">
+    <name>Julius Vitkauskas</name>
+  </developer>
+  <description>
+    <p>
+      M-Flasher backs up, restores and reinstalls the firmware of an M-VAVE FM-1 or
+      SMK-37 Pro / Elite over USB, and installs m-bootloader. It talks to the
+      chip's built-in USB download mode, so it also works when the firmware on the
+      unit is broken.
+    </p>
+    <ul>
+      <li>Back up the whole flash, and restore a backup</li>
+      <li>Install firmware from M-VAVE's .fwsc packages, as downloaded</li>
+      <li>Install m-bootloader, or put the stock one back</li>
+      <li>A flash map shows what will change before anything is written</li>
+    </ul>
+    <p>Unofficial: not affiliated with M-VAVE or JieLi.</p>
+  </description>
+  <launchable type="desktop-id">io.github.jvitkauskas.m-flasher.desktop</launchable>
+  <url type="homepage">https://github.com/jvitkauskas/m-flasher</url>
+  <url type="bugtracker">https://github.com/jvitkauskas/m-flasher/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/jvitkauskas/m-flasher/main/docs/screenshot.jpg</image>
+      <caption>Connected to an SMK-37 Pro: the device, the operations and the flash map</caption>
+    </screenshot>
+  </screenshots>
+  <provides>
+    <binary>m-flasher</binary>
+    <!-- a unit in download mode -->
+    <modalias>usb:v4C4Ap8057d*</modalias>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

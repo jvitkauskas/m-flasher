@@ -1,0 +1,116 @@
+# Linux packages (.deb, .rpm) with nFPM: made by build.sh, which generates
+# the files under target/package-files first. ARCH is amd64 or arm64 (named
+# for the deb and rpm conventions by nFPM).
+name: m-flasher
+version: ${VERSION}
+release: 1
+changelog: target/package-files/changelog.yml
+arch: ${ARCH}
+platform: linux
+section: utils
+priority: optional
+maintainer: Julius Vitkauskas <zadintuvas@gmail.com>
+vendor: Julius Vitkauskas
+homepage: https://github.com/jvitkauskas/m-flasher
+license: MIT AND OFL-1.1
+description: |-
+  Firmware backup and flasher for M-VAVE FM-1 and SMK-37 synthesizers
+  Back up, restore and reinstall the firmware of an M-VAVE FM-1 or SMK-37
+  Pro / Elite over USB, and install m-bootloader. It talks to the
+  chip's built-in USB download mode, so it also works when the firmware on
+  the unit is broken. A window and a command line.
+
+contents:
+  - src: target/release/m-flasher
+    dst: /usr/bin/m-flasher
+    file_info: { mode: 0755 }
+  - src: linux/70-m-flasher.rules
+    dst: /usr/lib/udev/rules.d/70-m-flasher.rules
+    file_info: { mode: 0644 }
+  - src: linux/package/modules-load.conf
+    dst: /usr/lib/modules-load.d/m-flasher.conf
+    file_info: { mode: 0644 }
+  - src: linux/package/io.github.jvitkauskas.m-flasher.desktop
+    dst: /usr/share/applications/io.github.jvitkauskas.m-flasher.desktop
+    file_info: { mode: 0644 }
+  - src: target/package-files/io.github.jvitkauskas.m-flasher.metainfo.xml
+    dst: /usr/share/metainfo/io.github.jvitkauskas.m-flasher.metainfo.xml
+    file_info: { mode: 0644 }
+  - src: linux/m-flasher.png
+    dst: /usr/share/icons/hicolor/256x256/apps/io.github.jvitkauskas.m-flasher.png
+    file_info: { mode: 0644 }
+  # (documentation is marked as such in the rpm; nFPM leaves files of that
+  # type out of a deb, so the deb lists them plainly)
+  - src: README.md
+    dst: /usr/share/doc/m-flasher/README.md
+    packager: deb
+    file_info: { mode: 0644 }
+  - src: README.md
+    dst: /usr/share/doc/m-flasher/README.md
+    type: doc
+    packager: rpm
+    file_info: { mode: 0644 }
+  - src: target/package-files/m-flasher.1.gz
+    dst: /usr/share/man/man1/m-flasher.1.gz
+    packager: deb
+    file_info: { mode: 0644 }
+  - src: target/package-files/m-flasher.1.gz
+    dst: /usr/share/man/man1/m-flasher.1.gz
+    type: doc
+    packager: rpm
+    file_info: { mode: 0644 }
+  - src: linux/package/copyright
+    dst: /usr/share/doc/m-flasher/copyright
+    packager: deb
+    file_info: { mode: 0644 }
+  - src: LICENSE
+    dst: /usr/share/licenses/m-flasher/LICENSE
+    type: license
+    packager: rpm
+    file_info: { mode: 0644 }
+
+scripts:
+  postinstall: linux/package/postinstall.sh
+  postremove: linux/package/postremove.sh
+
+# The window loads its graphics and display libraries when it starts, so
+# the packaging tools cannot see them: listed here.
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.35)
+      - libgcc-s1
+      - libegl1
+      - libxkbcommon0
+    recommends:
+      - libwayland-client0
+      - libwayland-egl1
+      - libxkbcommon-x11-0
+      - libx11-6
+      - libx11-xcb1
+      - libxcursor1
+      - libxi6
+      - libxrandr2
+      - xdg-desktop-portal
+  rpm:
+    # by library rather than package, so that the same package suits Fedora,
+    # RHEL and openSUSE
+    depends:
+      - libc.so.6(GLIBC_2.35)(64bit)
+      - libgcc_s.so.1()(64bit)
+      - libEGL.so.1()(64bit)
+      - libxkbcommon.so.0()(64bit)
+    recommends:
+      - libwayland-client.so.0()(64bit)
+      - libwayland-egl.so.1()(64bit)
+      - libxkbcommon-x11.so.0()(64bit)
+      - libX11.so.6()(64bit)
+      - libX11-xcb.so.1()(64bit)
+      - libXcursor.so.1()(64bit)
+      - libXi.so.6()(64bit)
+      - libXrandr.so.2()(64bit)
+      - xdg-desktop-portal
+
+rpm:
+  group: Applications/System
+  summary: Firmware backup and flasher for M-VAVE FM-1 and SMK-37 synthesizers

@@ -1,0 +1,9 @@
+# JieLi download mode (USB disk "WL82 UBOOT1.00", 4C4A:8057): let the user
+# logged in at the computer send it SCSI commands, so that M-Flasher runs
+# without root.
+#   sudo cp 70-m-flasher.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+# then reconnect the unit.
+SUBSYSTEM=="scsi_generic", ATTRS{idVendor}=="4c4a", ATTRS{idProduct}=="8057", TAG+="uaccess"
+# the same for the USB device itself (a build with the `usb` feature talks to
+# it through libusb, as on macOS)
+SUBSYSTEM=="usb", ATTR{idVendor}=="4c4a", ATTR{idProduct}=="8057", TAG+="uaccess"

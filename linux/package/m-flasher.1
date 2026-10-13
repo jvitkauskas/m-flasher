@@ -1,0 +1,95 @@
+.TH M-FLASHER 1 "" "M-Flasher" "User Commands"
+.SH NAME
+m-flasher \- back up, restore and reinstall the firmware of M-VAVE FM-1 and SMK-37 synthesizers
+.SH SYNOPSIS
+.B m-flasher
+.br
+.B m-flasher
+.RI [ options ]
+.B find
+|
+.B info
+|
+.B backup
+.RI [ dir ]
+.br
+.B m-flasher
+.RI [ options ]
+.B restore
+.I backup.bin
+.br
+.B m-flasher
+.RI [ options ]
+.B firmware
+.I package.fwsc
+.RB [ \-\-with\-bootloader ]
+.RB [ \-\-wipe\-settings ]
+.br
+.B m-flasher
+.RI [ options ]
+.B bootloader
+.RB [ \-\-stock
+.IR package.fwsc " | "
+.B \-\-file
+.IR uboot.boot ]
+.SH DESCRIPTION
+M-Flasher backs up, restores and reinstalls the firmware of an M-VAVE FM-1 or
+SMK-37 Pro / Elite over USB, and installs m-bootloader. It talks to the
+chip's built-in USB download mode, so it also works when the firmware on the
+unit is broken. Without arguments it opens its window; with arguments it is a
+command-line tool.
+.PP
+Put the unit in download mode and connect it with a USB data cable: with
+m-bootloader, hold REC (SMK-37: SEQ REC) while switching it on; with
+Felucca, SLOOP or Snoop37 running, hold OCT\- and OCT+ for 5 seconds.
+.PP
+Changes are shown first and need a typed
+.BR yes .
+A full backup is saved before the first write, and everything written is
+verified.
+.SH COMMANDS
+.TP
+.B find
+List the units in download mode.
+.TP
+.B info
+Read the unit's flash and show the model, firmware and bootloader.
+.TP
+.BR backup " [\fIdir\fR]"
+Save the whole flash and a .json describing it.
+.TP
+.BI restore " backup.bin"
+Write the parts of a backup that differ from the unit.
+.TP
+.BI firmware " package.fwsc"
+Install the firmware from an M-VAVE package;
+.B \-\-with\-bootloader
+also writes its stock bootloader,
+.B \-\-wipe\-settings
+erases the settings and Bluetooth pairings.
+.TP
+.B bootloader
+Install m-bootloader for the identified model, or the stock one from a
+package
+.RB ( \-\-stock ),
+or a bootloader file
+.RB ( \-\-file ).
+.SH OPTIONS
+.TP
+.BI \-\-device " path"
+The unit to use, when more than one is connected.
+.TP
+.BR \-\-board " fm1|smk37"
+The model, when it cannot be identified for certain.
+.TP
+.BI \-\-backup\-dir " dir"
+Where backups go (default: ~/Documents/M-Flasher/backups).
+.TP
+.B \-\-yes
+Do not ask before writing.
+.SH FILES
+.TP
+.I /usr/lib/udev/rules.d/70-m-flasher.rules
+Gives the user logged in at the computer access to a unit in download mode.
+.SH SEE ALSO
+https://github.com/jvitkauskas/m-flasher

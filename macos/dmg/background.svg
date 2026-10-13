@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="500" viewBox="0 0 720 500">
+  <!-- Finder draws the app and the Applications shortcut at (184, 210) and (536, 210),
+       with black labels below them: keep that band light. -->
+  <defs>
+    <linearGradient id="paper" x2="0" y2="1">
+      <stop stop-color="#f6f2ec"/>
+      <stop offset="1" stop-color="#ebe5dc"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="500" fill="url(#paper)"/>
+  <rect width="720" height="112" fill="#28221f"/>
+  <rect y="112" width="720" height="3" fill="#7be8bb"/>
+  <text x="360" y="66" text-anchor="middle" font-family="Barlow Condensed" font-weight="700" font-size="54" letter-spacing="1" fill="#7be8bb">M-FLASHER</text>
+  <text x="360" y="94" text-anchor="middle" font-family="Barlow Condensed" font-weight="600" font-size="15" letter-spacing="4.5" fill="#b6a2e6">DRAG IT TO APPLICATIONS TO INSTALL</text>
+  <path d="M318 210 H398 M382 194 L398 210 L382 226" fill="none" stroke="#23706f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="36" y="306" width="648" height="176" rx="12" fill="#28221f"/>
+  <text x="60" y="336" font-family="Barlow Condensed" font-weight="600" font-size="14" letter-spacing="4" fill="#b6a2e6">FIRST LAUNCH</text>
+  <g font-family="Barlow Condensed" font-weight="700" font-size="18" fill="#7be8bb">
+    <text x="60" y="368">1</text>
+    <text x="60" y="423">2</text>
+    <text x="60" y="455">3</text>
+  </g>
+  <g font-family="Barlow Condensed" font-weight="600" font-size="18" fill="#e9e4dc">
+    <text x="80" y="368">Open M-Flasher from Applications. It is not signed, so macOS blocks it the first</text>
+    <text x="80" y="391">time: <tspan font-weight="700" fill="#7be8bb">System Settings → Privacy &amp; Security → Open Anyway</tspan>, then confirm.</text>
+    <text x="80" y="423">When it finds the unit, macOS asks for your password: download mode needs it.</text>
+    <text x="80" y="455">When macOS asks to let it access files on a removable volume (the unit), choose <tspan font-weight="700" fill="#7be8bb">Allow</tspan>.</text>
+  </g>
+</svg>
