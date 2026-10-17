@@ -104,7 +104,8 @@ impl Analysis {
         let region = |n: &str| table.iter().find(|e| (e.attr == 0x12 || e.attr == 0x92) && e.name == n).map(|e| e.addr);
         if region("USRTRIM") == Some(0xC1000) {
             ev.push((&SMK37, false, "the firmware has the SMK-37 calibration area".into()));
-        } else if region("VM") == Some(0x93000) && region("USR") == Some(0xEA000) {
+        } else if (region("VM") == Some(0x93000) || region("BTIF") == Some(0xE9000)) && region("USR") == Some(0xEA000) {
+            // stock and Baud Girl keep BTIF at 0xE9000 on the FM-1 (0xC0000 on the SMK-37)
             ev.push((&FM1, false, "the firmware uses the FM-1 flash layout".into()));
         }
         if let Some(id) = flash_id {
@@ -170,6 +171,9 @@ impl Analysis {
         self.firmware_text = "unknown".into();
         let table = app_table(flash, key);
         let Some(app) = table.iter().find(|e| e.name == "app.bin") else { return };
+        // Baud Girl keeps its settings at 0xD9000 on both models; its FM-1 build
+        // calls itself FM-1_101, like a stock version
+        let baud_girl = table.iter().any(|e| e.name == "VM" && e.addr == 0xD9000);
         if BOOT_AREA + (app.addr + app.len) as usize > flash.len() {
             return;
         }
@@ -190,7 +194,7 @@ impl Analysis {
             "Felucca".into()
         } else if let Some((model, version)) = idents.last() {
             let mut n = format!("{model} {version}");
-            if model == "SMK-37+VA" {
+            if model == "SMK-37+VA" || baud_girl {
                 n += " (Baud Girl)";
             } else if version != "900" && version != "000" && idents.len() == 1 {
                 n += " (stock)";

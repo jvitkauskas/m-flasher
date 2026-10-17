@@ -168,6 +168,15 @@ fn analysis_identifies_the_known_images() {
 }
 
 #[test]
+fn analysis_identifies_baud_girl_on_the_fm1() {
+    // its FM-1 build calls itself FM-1_101 and moves VM to 0xD9000
+    let a = Analysis::new(&need!("fm1-baudgirl.bin"), Some(0x856014), 0x980F);
+    assert_eq!(a.board.unwrap().key, "fm1");
+    assert!(a.certain);
+    assert_eq!(a.firmware_text, "FM-1 101 (Baud Girl)");
+}
+
+#[test]
 fn sector_maps_of_the_known_images() {
     let m = sector_map(&need!("smk37-stock.bin"), 0x980F, Some(&SMK37));
     assert_eq!(region_ranges(&m, Region::Firmware), "04-9C");
