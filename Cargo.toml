@@ -1,6 +1,6 @@
 [package]
 name = "m-flasher"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Back up, restore and install firmware/bootloaders on the M-VAVE FM-1 and SMK-37 through the chip's USB download mode"
 license = "MIT"
