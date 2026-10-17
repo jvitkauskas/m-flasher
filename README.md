@@ -9,7 +9,7 @@ the unit is broken. For Windows, macOS and Linux.
 > Unofficial: not affiliated with M-VAVE or JieLi. It saves a backup before it
 > writes anything and checks every write, but use it at your own risk.
 
-![M-Flasher connected to an SMK-37 Pro in download mode: the device panel, the operations and the flash map](docs/screenshot.jpg)
+![M-Flasher connected to an FM-1 in download mode, with m-bootloader installed: the device panel, the operations and the flash map](docs/screenshot.jpg)
 
 ## What it does
 
