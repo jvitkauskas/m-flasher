@@ -67,4 +67,5 @@ On an SMK-37 Pro, from Linux, Windows and macOS (an M3 Mac): identifying
 stock firmware, Baud Girl and Snoop37; backups (identical to jl-uboot-tool's
 reads); installing m-bootloader; installing stock firmware over Baud
 Girl and over Snoop37; restoring a backup (the flash afterwards identical to
-it). Not yet tried on an FM-1.
+it). On an FM-1, from Linux: backups (two reads identical), installing m-bootloader and putting
+the stock bootloader back, restoring, and the unit's screen during operations.

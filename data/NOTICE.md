@@ -1,7 +1,7 @@
 # Bundled files
 
 From [m-bootloader](https://github.com/jvitkauskas/m-bootloader) release
-[v1.0](https://github.com/jvitkauskas/m-bootloader/releases/tag/v1.0), MIT
+[v1.1](https://github.com/jvitkauskas/m-bootloader/releases/tag/v1.1), MIT
 License, (c) 2026 Julius Vitkauskas:
 
 | File | What | Release file |
