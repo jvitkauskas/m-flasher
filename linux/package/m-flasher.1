@@ -8,6 +8,8 @@ m-flasher \- back up, restore and reinstall the firmware of M-VAVE FM-1 and SMK-
 .RI [ options ]
 .B find
 |
+.B download\-mode
+|
 .B info
 |
 .B backup
@@ -40,7 +42,9 @@ unit is broken. Without arguments it opens its window; with arguments it is a
 command-line tool.
 .PP
 Put the unit in download mode and connect it with a USB data cable: with
-m-bootloader, hold REC (SMK-37: SEQ REC) while switching it on; with
+M-VAVE's firmware or Felucca running, run
+.BR "m-flasher download-mode" ;
+with m-bootloader, hold REC (SMK-37: SEQ REC) while switching it on; with
 Felucca, SLOOP or Snoop37 running, hold OCT\- and OCT+ for 5 seconds.
 .PP
 Changes are shown first and need a typed
@@ -50,7 +54,11 @@ verified.
 .SH COMMANDS
 .TP
 .B find
-List the units in download mode.
+List the units in download mode, and those running, on USB MIDI.
+.TP
+.B download\-mode
+Switch the unit that is running, connected over USB MIDI, to download mode:
+send it the SysEx F0 22 24 35 7D F7 and wait for it to come back.
 .TP
 .B info
 Read the unit's flash and show the model, firmware and bootloader.

@@ -11,6 +11,7 @@ mod controller;
 mod fonts;
 mod formats;
 mod jl;
+mod midi;
 mod ops;
 mod scsi;
 mod sectormap;

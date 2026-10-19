@@ -21,6 +21,13 @@ How the unit is reached differs by system:
   user and starts a small root helper through the system's password dialog
   (`src/macos.rs`), which does the USB transfers for it.
 
+A unit that is running normally is switched to download mode with the soft
+key, the SysEx `F0 22 24 35 7D F7` on its first MIDI port, which M-VAVE's
+firmware and Felucca answer by restarting into the ROM's download mode. Linux
+writes it to the ALSA raw-MIDI device (port 0, as `amidi -p hw:N,0,0`) with
+libc only, so the program still needs no ALSA library; Windows and macOS use
+[midir](https://github.com/Boddlnagg/midir) (WinMM, CoreMIDI).
+
 It is one native executable: the window (egui), the command line, the
 flash loader, the m-bootloader builds and the fonts are all inside it.
 
@@ -35,6 +42,7 @@ flash loader, the m-bootloader builds and the fonts are all inside it.
 | `src/usb.rs` | USB mass storage through libusb (macOS; Linux with `--features usb`) |
 | `src/macos.rs` | macOS: the root helper, started through the system's password dialog |
 | `src/jl.rs` | the download-mode protocol and starting the loader |
+| `src/midi.rs` | the soft key: download mode over USB MIDI |
 | `src/ops.rs` | the actions and their safety rules |
 | `src/controller.rs` | the window's logic, in background threads |
 | `src/ui.rs` | the window: the panel and the flash map |
@@ -69,3 +77,9 @@ reads); installing m-bootloader; installing stock firmware over Baud
 Girl and over Snoop37; restoring a backup (the flash afterwards identical to
 it). On an FM-1, from Linux: backups (two reads identical), installing m-bootloader and putting
 the stock bootloader back, restoring, and the unit's screen during operations.
+
+Download mode over USB MIDI, from Linux: on an SMK-37 Pro with the stock
+bootloader and firmware 016 (switched, then read and checked), and on an
+FM-1. The soft key itself was seen to work, with `amidi`, on the stock
+firmware of the FM-1 (015), the SMK-37 Pro and the SMK-37 Elite (016).
+Windows and macOS not yet tried.
