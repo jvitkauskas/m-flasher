@@ -139,6 +139,9 @@ pub struct Shared {
     pub wipe: bool,
     pub with_boot: bool,
     pub boot_source: BootSource,
+    /// A unit running normally, found on USB MIDI (its name), while none is in
+    /// download mode: the soft key can switch it.
+    pub midi: Option<String>,
 }
 
 fn file_key(k: FileKind) -> &'static str {
@@ -197,6 +200,7 @@ impl Controller {
                 wipe: false,
                 with_boot: false,
                 boot_source: BootSource::Open,
+                midi: None,
             })),
             unit: Arc::new(Mutex::new(None)),
             plan: Arc::new(Mutex::new(None)),
@@ -276,9 +280,33 @@ impl Controller {
                 if self.shared.lock().unwrap().multiple != multiple {
                     self.with(|s| s.multiple = multiple);
                 }
+                let midi = match (&connected, devs.is_empty()) {
+                    (None, true) => crate::midi::find_units().into_iter().next().map(|u| u.name),
+                    _ => None,
+                };
+                if self.shared.lock().unwrap().midi != midi {
+                    self.with(|s| s.midi = midi);
+                }
             }
             std::thread::sleep(Duration::from_millis(1500));
         }
+    }
+
+    /// Switch the unit found on USB MIDI to download mode (the soft key); the
+    /// scan then finds and connects it.
+    pub fn enter_download_mode(&self) {
+        self.work("switching to download mode", |c| {
+            let units = crate::midi::find_units();
+            let unit = match units.len() {
+                0 => return Err(Error::Refused("the unit is no longer on USB MIDI".into())),
+                1 => &units[0],
+                _ => return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into())),
+            };
+            c.log(format!("Switching the {} to download mode over USB MIDI", unit.name));
+            unit.soft_key().map_err(Error::Io)?;
+            c.with(|s| s.midi = None);
+            Ok(())
+        });
     }
 
     fn drop_unit(&self) {

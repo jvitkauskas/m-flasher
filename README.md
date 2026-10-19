@@ -28,14 +28,18 @@ the unit is broken. For Windows, macOS and Linux.
    and follow its short instructions. The apps are not signed, so the first
    start needs one extra confirmation.
 2. Put the unit in **download mode** and connect it with a USB data cable:
+   - with the unit running normally (M-VAVE's firmware or Felucca), just
+     connect it: M-Flasher finds it on USB MIDI and its **DOWNLOAD MODE**
+     button switches it over;
    - with m-bootloader: hold **REC** (SMK-37: **SEQ REC**) while
      switching it on;
    - with Felucca, SLOOP or Snoop37 running: hold **OCT-** and **OCT+** for 5 s.
 3. M-Flasher finds the unit and shows what is on it. Start with a backup.
 
 A unit with the stock bootloader and stock firmware cannot enter download mode
-from its keys: install
-[m-bootloader](https://github.com/jvitkauskas/m-bootloader) first.
+from its keys, but **DOWNLOAD MODE** works on it. Installing
+[m-bootloader](https://github.com/jvitkauskas/m-bootloader) adds the keys and
+a recovery menu for when the firmware does not start.
 
 ## More
 

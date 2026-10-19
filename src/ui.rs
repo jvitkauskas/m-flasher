@@ -85,6 +85,7 @@ fn prompt(s: &Shared) -> String {
     match (&s.device, s.phase) {
         (None, Phase::Connecting) => "DO NOT UNPLUG OR SWITCH OFF".into(),
         (None, _) if s.multiple => "CONNECT ONLY ONE UNIT".into(),
+        (None, _) if s.midi.is_some() => format!("{} RUNNING · PRESS DOWNLOAD MODE", s.midi.clone().unwrap_or_default().to_uppercase()),
         (None, _) => "HOLD SEQ REC (SMK-37) OR REC (FM-1) WHILE SWITCHING ON".into(),
         (Some(_), Phase::Working) if s.mode == Mode::Backup => "SAVING FULL BACKUP · 1 MiB".into(),
         (Some(_), Phase::Working) if s.stage[2] == Stage::Idle => "SAVING A BACKUP FIRST · DO NOT SWITCH OFF".into(),
@@ -308,8 +309,20 @@ impl eframe::App for App {
             None => "AUTO BACKUP BEFORE EVERY WRITE".into(),
         };
         match (dev, st.mode) {
+            (None, _) if st.midi.is_some() => {
+                let name = st.midi.clone().unwrap_or_default();
+                if file_row(&p, "USB MIDI", Some(format!("{name} · running")), "DOWNLOAD MODE", "softkey") {
+                    self.ctl.enter_download_mode();
+                }
+                p.text(56.0, 720.0, Align2::LEFT_CENTER,
+                    "Restarts it into download mode with a MIDI message: no keys, whichever bootloader it has.",
+                    "tech", 15.0, DIM, 0.3);
+                p.text(56.0, 744.0, Align2::LEFT_CENTER,
+                    "Nothing is written. Switching it off and on leaves download mode.", "tech", 15.0, DIM, 0.3);
+            }
             (None, _) => {
                 let mut rows = vec![
+                    ("M-VAVE firmware or Felucca running", "connect it: DOWNLOAD MODE appears here"),
                     ("SMK-37 with m-bootloader", "hold SEQ REC while switching on"),
                     ("FM-1 with m-bootloader", "hold REC while switching on"),
                     ("Felucca, SLOOP, Snoop37 running", "hold OCT- and OCT+ for 5 s"),
@@ -318,8 +331,9 @@ impl eframe::App for App {
                 if cfg!(target_os = "macos") {
                     rows.push(("Removable volume prompt", "choose Allow: that is the unit"));
                 }
+                let step = if rows.len() > 5 { 21.0 } else { 25.0 };
                 for (i, (a, b)) in rows.iter().enumerate() {
-                    let y = 662.0 + i as f32 * 25.0;
+                    let y = 662.0 + i as f32 * step;
                     p.text(56.0, y, Align2::LEFT_CENTER, a, "tech", 15.5, LAV, 0.0);
                     p.text(360.0, y, Align2::LEFT_CENTER, b, "tech", 15.5, INK, 0.0);
                 }

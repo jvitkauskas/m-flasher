@@ -1,7 +1,7 @@
 //! Command-line mode (the same operations as the window):
 //!
 //! ```text
-//! m-flasher find | info | backup [DIR] | restore BACKUP.bin
+//! m-flasher find | download-mode | info | backup [DIR] | restore BACKUP.bin
 //!           firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings]
 //!           bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot]
 //! options:  --device PATH  --board fm1|smk37  --backup-dir DIR  --yes
@@ -13,7 +13,7 @@ use crate::scsi::{Device, find_devices};
 use std::io::Write;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: m-flasher [find | info | backup [DIR] | restore BACKUP.bin |
+const USAGE: &str = "usage: m-flasher [find | download-mode | info | backup [DIR] | restore BACKUP.bin |
                  firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings] |
                  bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot]]
        options: --device PATH  --board fm1|smk37  --backup-dir DIR  --yes
@@ -57,6 +57,35 @@ fn progress(done: usize, total: usize) {
 
 fn read(path: &str) -> Result<Vec<u8>, Error> {
     std::fs::read(path).map_err(|e| Error::Io(format!("cannot read {path}: {e}")))
+}
+
+/// Send the soft key to the one unit on USB MIDI and wait for it to come
+/// back in download mode.
+fn download_mode() -> Result<(), Error> {
+    if !find_devices().is_empty() {
+        println!("A unit is already in download mode");
+        return Ok(());
+    }
+    let units = crate::midi::find_units();
+    let unit = match units.len() {
+        0 => return Err(Error::Refused("no FM-1 or SMK-37 found on USB MIDI: is it switched on and connected?".into())),
+        1 => &units[0],
+        _ => return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into())),
+    };
+    println!("Switching the {} to download mode over USB MIDI", unit.name);
+    unit.soft_key().map_err(Error::Io)?;
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Some((p, d)) = find_devices().into_iter().next() {
+            println!("In download mode: {p}\t{d}");
+            return Ok(());
+        }
+    }
+    Err(Error::Refused(format!(
+        "the {} did not come back in download mode within 20 s: its firmware may not know the soft key; \
+         use its keys instead (see the window's HOW TO CONNECT)",
+        unit.name
+    )))
 }
 
 pub fn run(args: Vec<String>) -> i32 {
@@ -104,7 +133,13 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         for (p, d) in find_devices() {
             println!("{p}\t{d}");
         }
+        for u in crate::midi::find_units() {
+            println!("midi\t{} (running; download-mode switches it)", u.name);
+        }
         return Ok(());
+    }
+    if cmd == "download-mode" {
+        return download_mode();
     }
     if !matches!(cmd.as_str(), "info" | "backup" | "restore" | "firmware" | "bootloader") {
         return Err(Error::Refused(USAGE.into()));
@@ -114,6 +149,11 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         None => {
             let devs = find_devices();
             match devs.len() {
+                0 if !crate::midi::find_units().is_empty() => {
+                    return Err(Error::Refused(
+                        "the unit is running, not in download mode: `m-flasher download-mode` switches it".into(),
+                    ));
+                }
                 0 => return Err(Error::Refused("no unit in download mode found (a USB disk \"WL82 UBOOT1.00\")".into())),
                 1 => devs[0].0.clone(),
                 _ => return Err(Error::Refused("more than one unit in download mode: connect only one, or pass --device".into())),

@@ -46,6 +46,11 @@ no `/dev/sg*`. `m-flasher.png` is the icon, for a launcher of your own.
 The unit's chip has a USB download mode built into its ROM, which works even
 when the firmware does not. To enter it:
 
+- with the unit running normally and connected: M-Flasher finds it on USB
+  MIDI and offers **DOWNLOAD MODE**, which restarts it into download mode
+  with a MIDI message (`m-flasher download-mode` on the command line). This
+  works with M-VAVE's own firmware (FM-1 015, SMK-37 Pro and Elite 016) and
+  Felucca, whichever bootloader the unit has;
 - with m-bootloader: hold **REC** (SMK-37: **SEQ REC**) while switching the
   unit on;
 - with Felucca, SLOOP or Snoop37 running: hold **OCT-** and **OCT+** for 5 s;
@@ -58,9 +63,9 @@ by itself, reads the whole flash and shows the model, the firmware and the
 bootloader; the unit's own screen then shows what is going on.
 
 A unit with the stock bootloader and a working stock firmware cannot be put
-in download mode from its keys. Install
-[m-bootloader](https://github.com/jvitkauskas/m-bootloader) first, reaching
-download mode once with a USB_KEY dongle (a Raspberry Pi Pico).
+in download mode from its keys: use **DOWNLOAD MODE**. If the firmware does
+not start, the USB_KEY dongle (a Raspberry Pi Pico) still reaches download
+mode.
 
 When you are done, unplug the unit and switch it off and on again.
 
@@ -93,7 +98,8 @@ verified. Hover over a sector to see its address and contents.
 The same executable is a command-line tool when given arguments:
 
 ```sh
-m-flasher find                 # the units in download mode
+m-flasher find                 # the units in download mode (and those running, on USB MIDI)
+m-flasher download-mode        # switch a running unit to download mode over USB MIDI
 m-flasher info                 # what is on the unit
 m-flasher backup [DIR]
 m-flasher restore BACKUP.bin
