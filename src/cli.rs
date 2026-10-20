@@ -72,8 +72,8 @@ fn download_mode() -> Result<(), Error> {
         1 => &units[0],
         _ => return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into())),
     };
-    println!("Switching the {} to download mode over USB MIDI", unit.name);
     unit.soft_key().map_err(Error::Io)?;
+    println!("Sent the {} the download-mode message over USB MIDI; waiting for it", unit.name);
     for _ in 0..40 {
         std::thread::sleep(std::time::Duration::from_millis(500));
         if let Some((p, d)) = find_devices().into_iter().next() {
