@@ -145,7 +145,7 @@ mod sys {
 
     /// The kernel's sequencer interface (/dev/snd/seq): the layouts and
     /// requests of <sound/asequencer.h>.
-    mod seq {
+    pub(super) mod seq {
         use super::*;
         use std::mem::size_of;
 
@@ -281,33 +281,47 @@ mod sys {
             None
         }
 
-        pub fn send(card: i32, name: &str, msg: &[u8]) -> Result<(), Error> {
-            let failed = |what: &str, e: std::io::Error| Error::Failed(format!("{what}: {e}"));
-            let f = OpenOptions::new()
+        fn open() -> Result<File, Error> {
+            OpenOptions::new()
                 .read(true)
                 .write(true)
                 .custom_flags(libc::O_CLOEXEC)
                 .open("/dev/snd/seq")
-                .map_err(|_| Error::Unavailable)?;
+                .map_err(|_| Error::Unavailable)
+        }
+
+        pub fn send(card: i32, name: &str, msg: &[u8]) -> Result<(), Error> {
+            let f = open()?;
             let dest = unit_port(&f, card, name).ok_or(Error::Unavailable)?;
+            send_to(&f, dest, msg)
+        }
+
+        /// Send msg to the sequencer port client:port (for the loopback test).
+        #[cfg(test)]
+        pub fn send_to_port(client: u8, port: u8, msg: &[u8]) -> Result<(), Error> {
+            send_to(&open()?, Addr { client, port }, msg)
+        }
+
+        fn send_to(f: &File, dest: Addr, msg: &[u8]) -> Result<(), Error> {
+            let failed = |what: &str, e: std::io::Error| Error::Failed(format!("{what}: {e}"));
             let mut me: libc::c_int = 0;
-            ioctl(&f, CLIENT_ID, &mut me).map_err(|e| failed("sequencer client", e))?;
+            ioctl(f, CLIENT_ID, &mut me).map_err(|e| failed("sequencer client", e))?;
             let mut info: ClientInfo = zeroed();
             info.client = me;
             info.name[..9].copy_from_slice(b"M-Flasher");
-            let _ = ioctl(&f, SET_CLIENT_INFO, &mut info); // only a name for others to see
+            let _ = ioctl(f, SET_CLIENT_INFO, &mut info); // only a name for others to see
             let mut port: PortInfo = zeroed();
             port.addr = Addr { client: me as u8, port: 0 };
             port.name[..9].copy_from_slice(b"M-Flasher");
             port.capability = CAP_READ | CAP_SUBS_READ;
             port.kind = TYPE_MIDI_GENERIC | TYPE_APPLICATION;
-            ioctl(&f, CREATE_PORT, &mut port).map_err(|e| failed("sequencer port", e))?;
+            ioctl(f, CREATE_PORT, &mut port).map_err(|e| failed("sequencer port", e))?;
             // subscribing opens the unit's port for output, or joins those
             // already sending to it
             let mut sub: Subscribe = zeroed();
             sub.sender = port.addr;
             sub.dest = dest;
-            ioctl(&f, SUBSCRIBE_PORT, &mut sub).map_err(|e| match e.raw_os_error() {
+            ioctl(f, SUBSCRIBE_PORT, &mut sub).map_err(|e| match e.raw_os_error() {
                 Some(libc::EBUSY) => {
                     Error::Failed("its MIDI port is in use by another program: close it and try again".into())
                 }
@@ -323,7 +337,7 @@ mod sys {
             ev[14] = SUBSCRIBERS;
             ev[16..20].copy_from_slice(&(msg.len() as u32).to_ne_bytes());
             ev.extend_from_slice(msg);
-            (&f).write_all(&ev).map_err(|e| failed("sending", e))?;
+            (&*f).write_all(&ev).map_err(|e| failed("sending", e))?;
             // closing unsubscribes; the kernel sends what is left first
             Ok(())
         }
@@ -388,6 +402,21 @@ mod tests {
                  3 [SMK37Elite     ]: USB-Audio - SMK-37 Elite\n                      M-VAVE SMK-37 Elite at usb-0000:00:14.0-2, full speed\n";
         assert_eq!(asound_cards(t), vec![(0, "HDA Intel PCH".to_string()), (3, "SMK-37 Elite".to_string())]);
         assert!(known("SMK-37 Elite") && known("FM-1") && known("Felucca Update") && !known("HDA Intel PCH"));
+    }
+
+    /// On Linux with a sequencer: `aseqdump` (from alsa-utils) shows its port,
+    /// then `MIDI_TEST_PORT=client:port cargo test --release -- --ignored
+    /// sequencer_loopback`; aseqdump prints the system exclusive F0 22 24 35 7D F7.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore]
+    fn sequencer_loopback() {
+        let port = std::env::var("MIDI_TEST_PORT").expect("MIDI_TEST_PORT=client:port");
+        let (c, p) = port.split_once(':').expect("client:port");
+        match sys::seq::send_to_port(c.parse().unwrap(), p.parse().unwrap(), &SOFT_KEY) {
+            Ok(()) => {}
+            Err(e) => panic!("{e}"),
+        }
     }
 
     #[test]
