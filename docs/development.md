@@ -24,8 +24,11 @@ How the unit is reached differs by system:
 A unit that is running normally is switched to download mode with the soft
 key, the SysEx `F0 22 24 35 7D F7` on its first MIDI port, which M-VAVE's
 firmware and Felucca answer by restarting into the ROM's download mode. Linux
-writes it to the ALSA raw-MIDI device (port 0, as `amidi -p hw:N,0,0`) with
-libc only, so the program still needs no ALSA library; Windows and macOS use
+sends it through the kernel's sequencer interface (`/dev/snd/seq`), which
+shares the port with whatever else uses it (PipeWire's MIDI bridge, browsers,
+DAWs), with libc only, so the program still needs no ALSA library. Without a
+sequencer it writes to the raw-MIDI device (port 0, as `amidi -p hw:N,0,0`),
+which another program may hold: then it says so. Windows and macOS use
 [midir](https://github.com/Boddlnagg/midir) (WinMM, CoreMIDI).
 
 It is one native executable: the window (egui), the command line, the

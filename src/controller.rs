@@ -302,10 +302,21 @@ impl Controller {
                 1 => &units[0],
                 _ => return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into())),
             };
-            c.log(format!("Switching the {} to download mode over USB MIDI", unit.name));
             unit.soft_key().map_err(Error::Io)?;
+            c.log(format!("Sent the {} the download-mode message over USB MIDI; waiting for it", unit.name));
             c.with(|s| s.midi = None);
-            Ok(())
+            // (the scan is paused while this runs: it connects once we return)
+            for _ in 0..40 {
+                std::thread::sleep(Duration::from_millis(500));
+                if !find_devices().is_empty() {
+                    return Ok(());
+                }
+            }
+            Err(Error::Refused(format!(
+                "the {} did not come back in download mode within 20 s: its firmware may not know the message; \
+                 use its keys instead",
+                unit.name
+            )))
         });
     }
 
