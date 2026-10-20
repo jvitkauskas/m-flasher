@@ -350,8 +350,29 @@ mod sys {
 
     pub struct Port(MidiOutputPort);
 
+    /// CoreMIDI keeps the process's list of devices up to date through
+    /// notifications on the run loop of the thread that first made a MIDI
+    /// client: the window's scan thread, which runs no run loop. Without this,
+    /// the list stays as it was at the first scan, and a unit connected later is
+    /// never seen.
+    #[cfg(target_os = "macos")]
+    fn refresh() {
+        #[link(name = "CoreFoundation", kind = "framework")]
+        unsafe extern "C" {
+            static kCFRunLoopDefaultMode: *const std::ffi::c_void;
+            fn CFRunLoopRunInMode(mode: *const std::ffi::c_void, seconds: f64, after_one: u8) -> i32;
+        }
+        // SAFETY: runs this thread's run loop until nothing is pending; the
+        // mode is CoreFoundation's own constant
+        unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, 0) };
+    }
+
+    #[cfg(windows)]
+    fn refresh() {}
+
     pub fn units() -> Vec<(String, Port)> {
         let Ok(out) = MidiOutput::new("M-Flasher") else { return vec![] };
+        refresh();
         let ports = out.ports();
         let names: Vec<String> = ports.iter().map(|p| out.port_name(p).unwrap_or_default()).collect();
         super::first_ports(&names).into_iter().map(|i| (names[i].clone(), Port(ports[i].clone()))).collect()
