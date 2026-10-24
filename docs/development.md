@@ -103,4 +103,4 @@ firmware of the FM-1 (015), the SMK-37 Pro and the SMK-37 Elite (016).
 Windows and macOS not yet tried.
 
 FM-1 016 compatibility has been checked with the vendor package and simulated
-flash; installing and booting it on hardware has not yet been checked here.
+flash, and installing 016 with M-Flasher has been tested on a unit.
