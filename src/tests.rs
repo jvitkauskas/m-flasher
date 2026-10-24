@@ -485,7 +485,6 @@ fn backups_in_the_same_second_keep_both() {
 // ------------------------------------------------------------- run-ram ---
 
 use crate::cli::RamJob;
-use crate::formats::crc16;
 use crate::jl::{Connection, crc_cipher};
 use crate::scsi::{Data, Scsi};
 
