@@ -104,8 +104,10 @@ impl Analysis {
         let region = |n: &str| table.iter().find(|e| (e.attr == 0x12 || e.attr == 0x92) && e.name == n).map(|e| e.addr);
         if region("USRTRIM") == Some(0xC1000) {
             ev.push((&SMK37, false, "the firmware has the SMK-37 calibration area".into()));
-        } else if (region("VM") == Some(0x93000) || region("BTIF") == Some(0xE9000)) && region("USR") == Some(0xEA000) {
+        } else if ((region("VM") == Some(0x93000) || region("BTIF") == Some(0xE9000)) && region("USR") == Some(0xEA000))
+            || (region("VM") == Some(0xBA000) && region("SEQ64") == Some(0xDA000) && region("BTIF") == Some(0xEC000)) {
             // stock and Baud Girl keep BTIF at 0xE9000 on the FM-1 (0xC0000 on the SMK-37)
+            // FM-1 016 replaces USR with SEQ64 and moves VM and BTIF.
             ev.push((&FM1, false, "the firmware uses the FM-1 flash layout".into()));
         }
         if let Some(id) = flash_id {

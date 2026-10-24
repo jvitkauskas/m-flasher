@@ -12,15 +12,16 @@ pub enum Region {
     Pairings,
     Calibration,
     Presets,
+    Sequences,
     Sounds,
     Mac,
     Free,
 }
 
 impl Region {
-    pub const LEGEND: [Region; 9] = [
+    pub const LEGEND: [Region; 10] = [
         Region::Boot, Region::Firmware, Region::Settings, Region::Pairings, Region::Calibration,
-        Region::Presets, Region::Free, Region::Sounds, Region::Mac,
+        Region::Presets, Region::Sequences, Region::Free, Region::Sounds, Region::Mac,
     ];
 
     pub fn name(self) -> &'static str {
@@ -31,6 +32,7 @@ impl Region {
             Region::Pairings => "PAIRINGS",
             Region::Calibration => "CALIBRATION",
             Region::Presets => "PRESETS",
+            Region::Sequences => "SEQUENCES",
             Region::Sounds => "SOUNDS",
             Region::Mac => "MAC",
             Region::Free => "free",
@@ -44,6 +46,7 @@ fn region_of(name: &str) -> Option<Region> {
         "BTIF" => Region::Pairings,
         "USRTRIM" => Region::Calibration,
         "USRFLASH" => Region::Presets,
+        "SEQ64" => Region::Sequences,
         "USR" => Region::Sounds,
         _ => return None,
     })

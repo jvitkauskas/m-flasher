@@ -80,7 +80,11 @@ When you are done, unplug the unit and switch it off and on again.
 | **Put back the stock bootloader** | the boot area only, from an official package |
 
 Use the official `.fwsc` files from M-VAVE's website as they are: no
-conversion is needed.
+conversion is needed. FM-1 **016** is supported, including its DX7 data file
+and new settings and sequencer layout. Erasing settings clears settings and
+Bluetooth pairings at the addresses declared by the package; saved sequences
+are kept. When switching between 015 and 016, the app warns about the changed
+data layout. Restore a backup to return to the earlier firmware with its data.
 
 Backups go to `Documents/M-Flasher/backups` in your home folder; the
 **Backups** link at the top of the window opens it.
@@ -89,9 +93,9 @@ Backups go to `Documents/M-Flasher/backups` in your home folder; the
 
 The unit's 1 MiB flash is drawn as its 256 sectors of 4 KiB, coloured by what
 they hold: bootloader, firmware, settings, Bluetooth pairings, factory
-calibration, presets, sounds. When an action is chosen, the sectors it would
-change are outlined; while writing, they light up as they are written and
-verified. Hover over a sector to see its address and contents.
+calibration, presets, sequences, sounds. When an action is chosen, the sectors
+it would change are outlined; while writing, they light up as they are written
+and verified. Hover over a sector to see its address and contents.
 
 ## Command line
 
