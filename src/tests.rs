@@ -329,3 +329,250 @@ fn backups_in_the_same_second_keep_both() {
     assert!(a.with_extension("json").exists() && b.with_extension("json").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ------------------------------------------------------------- run-ram ---
+
+use crate::cli::RamJob;
+use crate::formats::crc16;
+use crate::jl::{Connection, crc_cipher};
+use crate::scsi::{Data, Scsi};
+
+/// A unit in download mode with a user program running: records every command
+/// (CDB and OUT data) after the inquiry, echoes the opcode of every command
+/// with a data-IN phase of 16 bytes, answers FD61 from a RAM that holds
+/// `addr as u8 ^ 0x5A` everywhere.
+#[derive(Default)]
+pub struct MockRom {
+    pub log: Vec<(Vec<u8>, Vec<u8>)>,
+    /// A running M-Flasher loader: (version, address); answers FC40 as it does.
+    pub loader: Option<(&'static str, u32)>,
+    /// Fail this many FD61 commands (a transfer error), then work.
+    pub fail_reads: usize,
+    /// Send one byte less than asked for in FD61.
+    pub short_reads: bool,
+}
+
+impl Scsi for MockRom {
+    fn execute(&mut self, cdb: &[u8], data: Data) -> Result<usize, ScsiError> {
+        if cdb[0] == 0x12 {
+            if let Data::In(b) = data {
+                b[8..32].fill(b' ');
+                b[8..12].copy_from_slice(b"WL82");
+                b[16..25].copy_from_slice(b"UBOOT1.00");
+            }
+            return Ok(36);
+        }
+        let op = u16::from_be_bytes([cdb[0], cdb[1]]);
+        match data {
+            Data::Out(d) => {
+                self.log.push((cdb.to_vec(), d.to_vec()));
+                Ok(d.len())
+            }
+            Data::None => unreachable!(),
+            Data::In(b) => {
+                self.log.push((cdb.to_vec(), vec![]));
+                if op == 0xFD61 {
+                    if self.fail_reads > 0 {
+                        self.fail_reads -= 1;
+                        return Err(ScsiError::Failed("transfer failed".into()));
+                    }
+                    let a = u32::from_be_bytes(cdb[2..6].try_into().unwrap());
+                    for (i, x) in b.iter_mut().enumerate() {
+                        *x = (a as usize + i) as u8 ^ 0x5A;
+                    }
+                    return Ok(b.len() - self.short_reads as usize);
+                }
+                b.fill(0);
+                b[..2].copy_from_slice(&cdb[..2]);
+                if let (0xFC40, Some((v, at))) = (op, self.loader) {
+                    b[2..6].copy_from_slice(b"MFLR");
+                    b[6..9].copy_from_slice(v.as_bytes());
+                    b[10..14].copy_from_slice(&at.to_be_bytes());
+                }
+                Ok(b.len())
+            }
+        }
+    }
+}
+
+fn ram_unit(rom: MockRom) -> Connection<MockRom> {
+    Connection::open("/dev/fake", rom).unwrap()
+}
+
+/// The commands that are not the loader probe (FC40).
+fn sent(c: &Connection<MockRom>) -> Vec<&(Vec<u8>, Vec<u8>)> {
+    c.device().log.iter().filter(|(cdb, _)| cdb[..2] != [0xFC, 0x40]).collect()
+}
+
+fn cdb16(head: &[u8]) -> Vec<u8> {
+    let mut c = head.to_vec();
+    c.resize(16, 0xFF);
+    c
+}
+
+#[test]
+fn run_ram_uploads_like_the_loader_and_jumps() {
+    let image: Vec<u8> = (0..1300u32).map(|i| (i * 7 + 3) as u8).collect();
+    let mut c = ram_unit(MockRom::default());
+    c.run_ram(0x01C2_8000, &image).unwrap();
+    let cmds = sent(&c);
+    assert_eq!(cmds.len(), 4, "three blocks and the jump");
+    for (i, (cdb, out)) in cmds[..3].iter().enumerate() {
+        let plain = &image[i * 512..(i * 512 + 512).min(image.len())];
+        // scrambled with the ROM's cipher: applying it again gives the image back
+        assert_eq!(&crc_cipher(out, 0xFFFF_FFFF), plain);
+        assert_ne!(out.as_slice(), plain);
+        let mut head = vec![0xFB, 0x06];
+        head.extend((0x01C2_8000u32 + 512 * i as u32).to_be_bytes());
+        head.extend((plain.len() as u16).to_be_bytes());
+        head.push(0);
+        head.extend(crc16(out).to_le_bytes()); // over the transmitted (scrambled) block
+        assert_eq!(cdb, &cdb16(&head), "block {i}");
+    }
+    assert_eq!(cmds[2].1.len(), 276);
+    // FB08: entry address, target argument 1, a 16-byte answer
+    assert_eq!(cmds[3].0, cdb16(&[0xFB, 0x08, 0x01, 0xC2, 0x80, 0x00, 0x00, 0x01]));
+}
+
+#[test]
+fn run_ram_upload_is_the_loaders_upload() {
+    // the loader goes through the same blocks: the bundled loader's first
+    // block, sent as the loader, is what run-ram sends for the same bytes
+    let (addr, img) = (0x01C2_0000u32, include_bytes!("../data/mflr-loader-a.bin"));
+    let mut c = ram_unit(MockRom::default());
+    c.run_ram(addr, img).unwrap();
+    let blocks: Vec<_> = sent(&c).iter().filter(|(cdb, _)| cdb[..2] == [0xFB, 0x06]).map(|(_, o)| o.clone()).collect();
+    let expected: Vec<Vec<u8>> = img.chunks(512).map(|b| crc_cipher(b, 0xFFFF_FFFF)).collect();
+    assert_eq!(blocks, expected);
+}
+
+#[test]
+fn run_ram_address_checks() {
+    use crate::jl::check_ram_range;
+    assert!(check_ram_range(0x01C2_0000, 1).is_ok());
+    assert!(check_ram_range(0x01C2_0000, 0x10000).is_ok(), "exactly fills it");
+    assert!(check_ram_range(0x01C2_0000, 0x10001).is_err());
+    assert!(check_ram_range(0x01C2_FFFF, 1).is_ok());
+    assert!(check_ram_range(0x01C2_FFFF, 2).is_err());
+    assert!(check_ram_range(0x01C3_0000, 1).is_err(), "the end is outside");
+    assert!(check_ram_range(0x01C1_FFFF, 1).is_err());
+    assert!(check_ram_range(0, 1).is_err());
+    assert!(check_ram_range(0xFFFF_FFFF, 1).is_err());
+    assert!(check_ram_range(0x01C2_0000, 0).is_err(), "empty image");
+    // run_ram refuses before sending anything
+    let mut c = ram_unit(MockRom::default());
+    assert!(c.run_ram(0x01C1_0000, &[1; 16]).is_err());
+    assert!(c.run_ram(0x01C2_FF00, &[1; 257]).is_err());
+    assert!(c.device().log.is_empty());
+    // the command line says so before it connects
+    let job = |addr: Option<&str>, len: usize| RamJob::new(&vec![0; len], addr, &[], None, None).map(|_| ());
+    assert!(job(Some("0x01C28000"), 100).is_ok());
+    assert!(job(Some("1c28000"), 100).is_ok());
+    assert!(matches!(job(Some("0x01C30000"), 1), Err(Error::Refused(_))));
+    assert!(matches!(job(Some("0x01C2F000"), 0x1001), Err(Error::Refused(_))));
+    assert!(matches!(job(Some("0x01C00000"), 1), Err(Error::Refused(_))));
+    assert!(matches!(job(Some("zz"), 1), Err(Error::Refused(_))));
+    assert!(matches!(job(None, 1), Err(Error::Refused(_))));
+}
+
+#[test]
+fn run_ram_never_overwrites_the_running_loader() {
+    let mut c = ram_unit(MockRom { loader: Some(("1.0", 0x01C2_0000)), ..Default::default() });
+    assert!(c.run_ram(0x01C2_0000, &[1; 16]).is_err());
+    assert!(c.run_ram(0x01C2_7F00, &[1; 512]).is_err(), "reaches into its slot");
+    assert!(sent(&c).is_empty());
+    c.run_ram(0x01C2_8000, &[1; 16]).unwrap();
+    assert_eq!(sent(&c).len(), 2, "the other slot works while the loader runs");
+    let mut c = ram_unit(MockRom { loader: Some(("1.0", 0x01C2_8000)), ..Default::default() });
+    assert!(c.run_ram(0x01C2_C000, &[1; 16]).is_err());
+    c.run_ram(0x01C2_0000, &[1; 0x8000]).unwrap();
+}
+
+#[test]
+fn run_ram_call_sends_the_opcode_and_returns_the_answer() {
+    let mut c = ram_unit(MockRom::default());
+    let r = c.call_program(0xFC60).unwrap();
+    assert_eq!(r[..2], [0xFC, 0x60]);
+    assert_eq!(sent(&c)[0].0, cdb16(&[0xFC, 0x60]));
+    c.call_program(0x0123).unwrap();
+    assert_eq!(sent(&c)[1].0, cdb16(&[0x01, 0x23]));
+    // flash erase / write, memory write and jump are not sent
+    for op in [0xFB00, 0xFB01, 0xFB04, 0xFB06, 0xFB08] {
+        assert!(c.call_program(op).is_err());
+    }
+    assert_eq!(sent(&c).len(), 2);
+}
+
+#[test]
+fn run_ram_read_is_chunked_and_advances_the_address() {
+    let mut c = ram_unit(MockRom::default());
+    let mut seen = vec![];
+    let data = c.read_ram(0x01C2_0010, 10000, &mut |d| seen.push(d)).unwrap();
+    assert_eq!(data.len(), 10000);
+    assert!(data.iter().enumerate().all(|(i, &b)| b == (0x01C2_0010usize + i) as u8 ^ 0x5A));
+    assert_eq!(seen, vec![4096, 8192, 10000]);
+    let cmds: Vec<_> = sent(&c).iter().map(|(cdb, _)| cdb.clone()).collect();
+    assert_eq!(cmds, vec![
+        cdb16(&[0xFD, 0x61, 0x01, 0xC2, 0x00, 0x10, 0x10, 0x00]),
+        cdb16(&[0xFD, 0x61, 0x01, 0xC2, 0x10, 0x10, 0x10, 0x00]),
+        cdb16(&[0xFD, 0x61, 0x01, 0xC2, 0x20, 0x10, 0x07, 0x10]),   // 1808 bytes
+    ]);
+    // exactly one chunk, and a length that is not a multiple of anything
+    let mut c = ram_unit(MockRom::default());
+    assert_eq!(c.read_ram(0x01C2_0000, 4096, &mut |_| {}).unwrap().len(), 4096);
+    assert_eq!(sent(&c).len(), 1);
+    assert_eq!(c.read_ram(0x01C2_0000, 1, &mut |_| {}).unwrap(), vec![0x5A]);
+}
+
+#[test]
+fn run_ram_read_retries_a_failed_transfer_but_not_a_short_one_silently() {
+    let mut c = ram_unit(MockRom { fail_reads: 1, ..Default::default() });
+    assert_eq!(c.read_ram(0x01C2_0000, 100, &mut |_| {}).unwrap().len(), 100);
+    assert_eq!(c.retries().0, 1);
+    assert_eq!(sent(&c).len(), 2, "the same command twice");
+    assert_eq!(sent(&c)[0], sent(&c)[1]);
+    let mut c = ram_unit(MockRom { short_reads: true, ..Default::default() });
+    let e = c.read_ram(0x01C2_0000, 100, &mut |_| {}).unwrap_err();
+    assert!(e.to_string().contains("99 of 100"), "{e}");
+}
+
+#[test]
+fn run_ram_command_line_job() {
+    let dir = std::env::temp_dir().join(format!("mflasher-runram-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("ram.bin");
+    let job = RamJob::new(&[0xAA; 600], Some("0x01C28000"), &["FC60".into(), "0xfc61".into()],
+                          Some("0x01C28000:5000"), Some(out.to_str().unwrap())).unwrap();
+    let mut c = ram_unit(MockRom::default());
+    let mut log = vec![];
+    job.run(&mut c, &mut |s| log.push(s)).unwrap();
+    // 2 upload blocks, the jump, 2 calls, 2 read chunks, in this order
+    let ops: Vec<[u8; 2]> = sent(&c).iter().map(|(cdb, _)| [cdb[0], cdb[1]]).collect();
+    assert_eq!(ops, vec![[0xFB, 6], [0xFB, 6], [0xFB, 8], [0xFC, 0x60], [0xFC, 0x61], [0xFD, 0x61], [0xFD, 0x61]]);
+    assert!(log.iter().any(|l| l.starts_with("0xFC60: fc 60 00")), "{log:?}");
+    let got = std::fs::read(&out).unwrap();
+    assert_eq!(got.len(), 5000);
+    assert_eq!(got[0], (0x01C2_8000u32 as u8) ^ 0x5A);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn run_ram_command_line_checks() {
+    let new = |calls: &[&str], read: Option<&str>, out: Option<&str>| {
+        let calls: Vec<String> = calls.iter().map(|s| s.to_string()).collect();
+        RamJob::new(&[1; 16], Some("0x01C20000"), &calls, read, out).map(|_| ())
+    };
+    assert!(new(&[], None, None).is_ok());
+    assert!(new(&["FC60"], Some("01C20000:16"), Some("o.bin")).is_ok());
+    assert!(new(&[], Some("0x01C20000:0x10"), Some("o.bin")).is_ok());
+    assert!(new(&["10000"], None, None).is_err(), "more than 16 bits");
+    assert!(new(&["xyz"], None, None).is_err());
+    assert!(new(&["FB00"], None, None).is_err());
+    assert!(new(&["fb08"], None, None).is_err());
+    assert!(new(&[], Some("01C20000:16"), None).is_err(), "--read needs -o");
+    assert!(new(&[], None, Some("o.bin")).is_err(), "-o needs --read");
+    assert!(new(&[], Some("01C20000"), Some("o")).is_err(), "no length");
+    assert!(new(&[], Some("01C20000:0"), Some("o")).is_err());
+    assert!(new(&[], Some("01C20000:99999999999"), Some("o")).is_err());
+    assert!(new(&[], Some("FFFFFFF0:32"), Some("o")).is_err(), "past the end of the address space");
+}

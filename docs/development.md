@@ -50,7 +50,7 @@ flash loader, the m-bootloader builds and the fonts are all inside it.
 | `src/controller.rs` | the window's logic, in background threads |
 | `src/ui.rs` | the window: the panel and the flash map |
 | `src/wordmark.rs` | the striped "M-FLASHER" lettering |
-| `src/cli.rs` | the command line |
+| `src/cli.rs` | the command line, including `run-ram` |
 | `data/` | the bundled flash loader and m-bootloader builds, from its [releases](https://github.com/jvitkauskas/m-bootloader/releases) ([NOTICE](../data/NOTICE.md)) |
 | `assets/` | fonts and the window icon ([README](../assets/README.md)) |
 | `linux/`, `windows/`, `macos/` | each system's package: icons, instructions, the udev rule, the disk image |

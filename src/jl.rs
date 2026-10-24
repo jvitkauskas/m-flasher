@@ -34,6 +34,37 @@ const ONLINE_DEVICE: u16 = 0xFC0A;
 #[allow(dead_code)] // the loader's on-chip CRC: for a faster verify later
 const FLASH_CRC16: u16 = 0xFC0E;
 const USB_BUFFER_SIZE: u16 = 0xFC14;
+/// Read RAM through a program of the user's (`run-ram`); the program implements it.
+const READ_RAM: u16 = 0xFD61;
+
+/// The RAM `run-ram` may write: the flash loader's two 32 KiB slots, the only
+/// RAM known to be safe (m-bootloader's SPEC §1, §10).
+pub const RAM_START: u32 = 0x01C2_0000;
+pub const RAM_END: u32 = 0x01C3_0000;
+/// Bytes of one loader slot: a running loader must not be overwritten.
+const SLOT_SIZE: u32 = 0x8000;
+/// Bytes per `run-ram` read command.
+pub const RAM_READ_CHUNK: usize = 4096;
+/// Commands `run-ram --call` will not send: with the flash loader running they
+/// erase or program flash, and the ROM's own write and jump are `run-ram`'s.
+pub const NOT_CALLABLE: [u16; 5] = [ERASE_BLOCK, ERASE_SECTOR, WRITE_FLASH, WRITE_MEMORY, JUMP];
+
+/// Whether `len` bytes at `addr` lie within the RAM `run-ram` may use.
+pub fn check_ram_range(addr: u32, len: usize) -> Result<(), String> {
+    if !(RAM_START..RAM_END).contains(&addr) {
+        return Err(format!("address 0x{addr:08X} is outside 0x{RAM_START:08X}..0x{RAM_END:08X}, the only RAM known to be safe"));
+    }
+    if len == 0 {
+        return Err("the image is empty".into());
+    }
+    if len > (RAM_END - addr) as usize {
+        return Err(format!(
+            "the image ({len} bytes) does not fit at 0x{addr:08X}: only {} bytes are left before 0x{RAM_END:08X}",
+            RAM_END - addr
+        ));
+    }
+    Ok(())
+}
 
 /// JieLi's "CrcDecode" cipher (the chip key comes back in it).
 pub fn crc_cipher(data: &[u8], key: u32) -> Vec<u8> {
@@ -118,13 +149,19 @@ pub struct Connection<S: Scsi> {
 }
 
 impl<S: Scsi> Connection<S> {
-    pub fn start(path: &str, mut dev: S, log: &mut dyn FnMut(String)) -> Result<Self, ScsiError> {
+    /// Opens the session: checks that it is a download-mode device, and does
+    /// nothing else (no loader is uploaded or started).
+    pub fn open(path: &str, mut dev: S) -> Result<Self, ScsiError> {
         let (vendor, product) = dev.inquiry()?;
         if vendor != VENDOR || product != PRODUCT {
             return Err(ScsiError::Failed(format!("{path} is \"{vendor} {product}\", not a {VENDOR} {PRODUCT} download-mode device")));
         }
-        let mut c = Connection { path: path.into(), dev, chip_key: 0, flash_id: 0, io: 512, read_io: 4096,
-                                 retried: 0, last_retry: String::new(), own: String::new(), mhz: 0 };
+        Ok(Connection { path: path.into(), dev, chip_key: 0, flash_id: 0, io: 512, read_io: 4096,
+                        retried: 0, last_retry: String::new(), own: String::new(), mhz: 0 })
+    }
+
+    pub fn start(path: &str, dev: S, log: &mut dyn FnMut(String)) -> Result<Self, ScsiError> {
+        let mut c = Self::open(path, dev)?;
         // What is running already? A loader stays registered until the unit is
         // switched off. (Commands the ROM alone does not know just fail.)
         let ours_running = c.identify();
@@ -163,6 +200,12 @@ impl<S: Scsi> Connection<S> {
             c.io = (u32::from_be_bytes([r[0], r[1], r[2], r[3]]) as usize).clamp(256, 4096);
         }
         Ok(c)
+    }
+
+    /// The transport (the tests look at what was sent).
+    #[cfg(test)]
+    pub fn device(&self) -> &S {
+        &self.dev
     }
 
     /// Our loader's (version, address), if it is the one answering.
@@ -218,6 +261,12 @@ impl<S: Scsi> Connection<S> {
 
     /// A command without data; returns the 14 answer bytes.
     fn call(&mut self, cmd: u16, args: &[u8]) -> Result<[u8; 14], ScsiError> {
+        Ok(self.call16(cmd, args)?[2..].try_into().unwrap())
+    }
+
+    /// A command without data; returns the whole 16-byte answer, whose first
+    /// two bytes echo the command.
+    fn call16(&mut self, cmd: u16, args: &[u8]) -> Result<[u8; 16], ScsiError> {
         let mut resp = [0u8; 16];
         let c = cdb(cmd, args);
         let what = match cmd {
@@ -228,7 +277,63 @@ impl<S: Scsi> Connection<S> {
         if u16::from_be_bytes([resp[0], resp[1]]) != cmd {
             return Err(ScsiError::Failed(format!("unexpected answer to command 0x{cmd:04x}")));
         }
-        Ok(resp[2..].try_into().unwrap())
+        Ok(resp)
+    }
+
+    /// `run-ram`: uploads `image` to RAM at `addr` the way the loader is
+    /// uploaded (512-byte blocks, each scrambled for the ROM) and jumps to it.
+    /// The program stays in RAM until the unit is switched off.
+    pub fn run_ram(&mut self, addr: u32, image: &[u8]) -> Result<(), ScsiError> {
+        check_ram_range(addr, image.len()).map_err(ScsiError::Failed)?;
+        // A running loader of ours is answering the commands (including the
+        // ROM's own, which it passes on): overwriting it would hang the unit.
+        if let Some((v, at)) = self.identify() {
+            let end = addr + image.len() as u32;
+            if addr < at + SLOT_SIZE && at < end {
+                return Err(ScsiError::Failed(format!(
+                    "the M-Flasher loader {v} is running at 0x{at:08X}..0x{:08X}, where this would write: \
+                     use an address outside it, or switch the unit off and on in download mode",
+                    at + SLOT_SIZE)));
+            }
+        }
+        let scrambled: Vec<Vec<u8>> = image.chunks(512).map(|b| crc_cipher(b, 0xFFFF_FFFF)).collect();
+        self.upload_and_jump(addr, &scrambled)
+    }
+
+    /// `run-ram`: sends the program a command and returns its 16-byte answer
+    /// (the program echoes the opcode in bytes 0..1).
+    pub fn call_program(&mut self, cmd: u16) -> Result<[u8; 16], ScsiError> {
+        if NOT_CALLABLE.contains(&cmd) {
+            return Err(ScsiError::Failed(format!("command 0x{cmd:04X} erases or writes flash or memory: not sent")));
+        }
+        self.call16(cmd, &[])
+    }
+
+    /// `run-ram`: reads `n` bytes at `addr` from the program (FD61), in
+    /// commands of at most RAM_READ_CHUNK bytes.
+    pub fn read_ram(&mut self, addr: u32, n: usize, progress: &mut dyn FnMut(usize)) -> Result<Vec<u8>, ScsiError> {
+        self.read_with(READ_RAM, RAM_READ_CHUNK, addr as usize, n, progress)
+    }
+
+    /// Reads n bytes at addr with read command `op`, `chunk` bytes at a time.
+    fn read_with(&mut self, op: u16, chunk: usize, addr: usize, n: usize, progress: &mut dyn FnMut(usize)) -> Result<Vec<u8>, ScsiError> {
+        let mut out = vec![0u8; n];
+        let mut done = 0;
+        while done < n {
+            let k = chunk.min(n - done);
+            let mut args = ((addr + done) as u32).to_be_bytes().to_vec();
+            args.extend((k as u16).to_be_bytes());
+            let c = cdb(op, &args);
+            let buf = &mut out[done..done + k];
+            // a short read would leave the rest of the chunk unread
+            self.retry(&format!("reading 0x{:05X}", addr + done), |d| match d.execute(&c, Data::In(buf))? {
+                got if got == k => Ok(()),
+                got => Err(ScsiError::Failed(format!("{got} of {k} bytes received"))),
+            })?;
+            done += k;
+            progress(done);
+        }
+        Ok(out)
     }
 
     /// The loader's CRC16 of n plain bytes at addr (n < 64 KiB).
@@ -296,23 +401,7 @@ impl<S: Scsi> Flash for Connection<S> {
     }
 
     fn read(&mut self, addr: usize, n: usize, progress: &mut dyn FnMut(usize)) -> Result<Vec<u8>, ScsiError> {
-        let mut out = vec![0u8; n];
-        let mut done = 0;
-        while done < n {
-            let k = self.read_io.min(n - done);
-            let mut args = ((addr + done) as u32).to_be_bytes().to_vec();
-            args.extend((k as u16).to_be_bytes());
-            let c = cdb(READ_FLASH, &args);
-            let buf = &mut out[done..done + k];
-            // a short read would leave the rest of the chunk unread
-            self.retry(&format!("reading 0x{:05X}", addr + done), |d| match d.execute(&c, Data::In(buf))? {
-                got if got == k => Ok(()),
-                got => Err(ScsiError::Failed(format!("{got} of {k} bytes received"))),
-            })?;
-            done += k;
-            progress(done);
-        }
-        Ok(out)
+        self.read_with(READ_FLASH, self.read_io, addr, n, progress)
     }
 
     fn erase(&mut self, addr: usize, n: usize) -> Result<(), ScsiError> {

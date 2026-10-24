@@ -105,6 +105,7 @@ m-flasher backup [DIR]
 m-flasher restore BACKUP.bin
 m-flasher firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings]
 m-flasher bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot]
+m-flasher run-ram IMAGE --addr 0x01C28000 [--call FC60]... [--read ADDR:LEN -o OUT]
 ```
 
 Options: `--device PATH` (with more than one unit), `--board fm1|smk37` (when
@@ -116,6 +117,42 @@ and need a typed `yes`, or `--yes`.
   Terminal; it asks for the password the same way, or run it with `sudo`. Not
   over SSH: macOS asks about the removable volume only on the screen.
 - Linux: `m-flasher info` (from the tarball: `./m-flasher info`); `man m-flasher` with the packages.
+
+## Running your own program in RAM
+
+`m-flasher run-ram` is for developers: it uploads a program of your own to the
+chip's RAM through download mode, starts it, and then talks to it. It is how
+m-bootloader's flash loader is started, without M-Flasher's own loader and
+without any flash operation.
+
+```sh
+m-flasher run-ram prog.bin --addr 0x01C28000 --call FC60 --call FC61 \
+                  --read 0x01C28000:4096 -o ram.bin
+```
+
+- `IMAGE` is a flat binary linked for `--addr`, with its entry at the first
+  byte, built like the flash loader (m-bootloader's `docs/SPEC.md` §10 gives
+  the contract). `--addr` is hex and must be in `0x01C20000` to `0x01C2FFFF`,
+  the flash loader's two 32 KiB slots, the only RAM known to be safe; the
+  image must end before `0x01C30000`. It is refused otherwise, and also when it
+  would overwrite an M-Flasher loader that is running (use the other slot).
+- `--call OPCODE` (16-bit hex, repeatable) sends the 16-byte command (the
+  opcode, then `FF`s) and prints the program's 16-byte answer in hex; the
+  program is expected to echo the opcode in the first two bytes. Flash erase
+  and write, memory write and jump (`FB00`, `FB01`, `FB04`, `FB06`, `FB08`) are
+  never sent.
+- `--read ADDR:LEN -o OUT` reads `LEN` bytes (decimal or `0x` hex, at most 16
+  MiB) from `ADDR` (hex) into `OUT`, with `FD61` commands of at most 4096
+  bytes: `FD 61`, the address (big-endian u32), the length (u16), then `FF`s.
+  The program has to implement `FD61`, sending the bytes with the ROM's send
+  callback.
+- `--device PATH` as for the other commands.
+
+This **runs arbitrary code on the chip**: only run programs you trust and
+understand. It does not write to the flash itself, but a program of yours can
+do anything the chip can. Nothing is kept: **switching the unit off and on
+again returns it to normal**. It works whether or not M-Flasher's loader was
+started before, and does not start it.
 
 ## Slow USB ports
 

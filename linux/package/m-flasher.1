@@ -34,6 +34,18 @@ m-flasher \- back up, restore and reinstall the firmware of M-VAVE FM-1 and SMK-
 .IR package.fwsc " | "
 .B \-\-file
 .IR uboot.boot ]
+.br
+.B m-flasher
+.RI [ options ]
+.B run\-ram
+.I image
+.BI \-\-addr " addr"
+.RB [ \-\-call
+.IR opcode ]...
+.RB [ \-\-read
+.IR addr:len
+.B \-o
+.IR file ]
 .SH DESCRIPTION
 M-Flasher backs up, restores and reinstalls the firmware of an M-VAVE FM-1 or
 SMK-37 Pro / Elite over USB, and installs m-bootloader. It talks to the
@@ -82,6 +94,23 @@ package
 .RB ( \-\-stock ),
 or a bootloader file
 .RB ( \-\-file ).
+.TP
+.BI run\-ram " image " \-\-addr " addr"
+Upload a program of your own to the chip's RAM (addr within
+0x01C20000..0x01C2FFFF, the image ending before 0x01C30000), start it, and
+talk to it; it does not touch the flash and does not start M-Flasher's flash
+loader. It runs arbitrary code on the chip, and switching the unit off and on
+returns it to normal.
+.B \-\-call
+.I opcode
+(16-bit hex, repeatable) sends the command and prints the 16-byte answer;
+.B \-\-read
+.I addr:len
+.B \-o
+.I file
+reads RAM from the program with FD61 commands of at most 4096 bytes. See
+.B m-flasher run\-ram \-\-help
+and the documentation.
 .SH OPTIONS
 .TP
 .BI \-\-device " path"
