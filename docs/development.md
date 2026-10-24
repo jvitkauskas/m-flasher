@@ -63,6 +63,21 @@ cargo build --release          # target/release/m-flasher
 cargo test --release           # FLASHER_TEST_DATA=DIR adds the tests with real flash images
 ```
 
+The optional test data includes `fm1-016.fwsc`, the vendor's
+[FM-1 016 package](https://yms-file-store.oss-cn-hongkong.aliyuncs.com/software/firmware/FM-1.fwsc)
+(SHA-256 `d017fb65e70aca97ee29d944470c3515a74581df5c0576bf70de917c7b2b61d5`).
+The URL may change with later releases. The tests check its three app files
+(`app.bin`, `cfg_tool.bin`, `DX7.bin`), upgrades and downgrades, settings wipes,
+and stock/m-bootloader replacement against simulated NOR flash. Synthetic
+tests cover the new layout and boot configuration placement without this file.
+
+FM-1 016's image ends at `0xA9000`; VM is at `0xBA000..0xDA000`, SEQ64 at
+`0xDA000..0xEC000`, and BTIF at `0xEC000..0xED000`. Its larger stock bootloader
+moves `isd_config.ini` from `0x38D0` to `0x3938`. Bootloader replacement reads
+the configuration's address and length from the file table, retaining its
+bytes and moving it within the boot area only when needed to fit a larger
+bootloader. It refuses to move it over other data.
+
 GitHub Actions (`.github/workflows/build.yml`) builds and tests the Linux,
 Windows and macOS packages for every push, and publishes them as a release
 for a `v*` tag; the `.deb` and `.rpm` are installed and run in clean
@@ -86,3 +101,6 @@ bootloader and firmware 016 (switched, then read and checked), and on an
 FM-1. The soft key itself was seen to work, with `amidi`, on the stock
 firmware of the FM-1 (015), the SMK-37 Pro and the SMK-37 Elite (016).
 Windows and macOS not yet tried.
+
+FM-1 016 compatibility has been checked with the vendor package and simulated
+flash; installing and booting it on hardware has not yet been checked here.

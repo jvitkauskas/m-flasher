@@ -7,7 +7,8 @@
 //! ```text
 //! 0x00000  boot area, 16 KiB: flash header (32 bytes) and file table
 //!          (32-byte entries from 0x20), the bootloader (uboot.boot) at 0xA0,
-//!          isd_config.ini at 0x38D0; all ENC with key 0xFFFF
+//!          isd_config.ini after it (0x38D0, or 0x3938 in FM-1 016); the
+//!          header, table and bootloader are ENC with key 0xFFFF
 //! 0x04000  app area: its own file table (app.bin, cfg_tool.bin and the region
 //!          descriptors VM, BTIF, USR, ...), ENC per 32-byte block with the chip
 //!          key XOR (offset in the area >> 2)
@@ -23,7 +24,6 @@ use std::fmt;
 pub const SECTOR: usize = 0x1000;
 pub const BOOT_AREA: usize = 0x4000;
 pub const BOOT_AT: usize = 0xA0;
-pub const ISD_AT: usize = 0x38D0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormatError(pub String);
@@ -270,21 +270,45 @@ pub fn stored_bootloader(flash: &[u8]) -> Option<Vec<u8>> {
 
 /// flash's boot area with its bootloader replaced. Keeps the flash header, the
 /// file table and isd_config (the unit's own); the bootloader's entry gets the
-/// new length and CRC, the space up to isd_config is filled with 0xFF. Stored
-/// as JieLi's packager writes it: the 16-byte header and the payload each ENC
-/// 0xFFFF on their own.
+/// new length and CRC, the space up to isd_config is filled with 0xFF. If a
+/// larger bootloader needs the space, moves the unit's configuration further
+/// into the boot area and updates its entry. Stored as JieLi's packager writes
+/// it: the 16-byte header and the payload each ENC 0xFFFF on their own.
 pub fn build_boot_area(flash: &[u8], boot: &[u8]) -> Result<Vec<u8>, FormatError> {
     bankcb_check(boot)?;
+    if flash.len() < BOOT_AREA {
+        return err("the boot area is incomplete");
+    }
     let mut area = flash[..BOOT_AREA].to_vec();
     let t = boot_table(&area);
     if t.len() < 3 || t[0].name != "uboot.boot" || t[0].addr as usize != BOOT_AT {
         return err("the boot area has no valid file table");
     }
-    if t[1].name != "isd_config.ini" || t[1].addr as usize != ISD_AT {
-        return err("isd_config is not at 0x38D0");
+    let (isd_at, isd_len) = (t[1].addr as usize, t[1].len as usize);
+    if t[1].name != "isd_config.ini" || isd_at < BOOT_AT || isd_at > BOOT_AREA
+        || isd_len == 0 || isd_len > BOOT_AREA - isd_at || t[0].len as usize > isd_at - BOOT_AT {
+        return err("isd_config is not safely contained in the boot area");
     }
-    if BOOT_AT + boot.len() > ISD_AT {
-        return err(format!("bootloader too large: {} bytes, room for {}", boot.len(), ISD_AT - BOOT_AT));
+    if boot.len() > BOOT_AREA - BOOT_AT - isd_len {
+        return err(format!("bootloader too large: {} bytes, room for {}", boot.len(), BOOT_AREA - BOOT_AT - isd_len));
+    }
+    let boot_end = BOOT_AT + boot.len();
+    let new_isd_at = if boot_end > isd_at { boot_end.next_multiple_of(4) } else { isd_at };
+    if new_isd_at + isd_len > BOOT_AREA {
+        return err("no room for the bootloader and the unit's configuration in the boot area");
+    }
+    if new_isd_at != isd_at {
+        if area[isd_at + isd_len..new_isd_at + isd_len].iter().any(|&b| b != 0xFF) {
+            return err("moving isd_config would overwrite other boot-area data");
+        }
+        let config = area[isd_at..isd_at + isd_len].to_vec();
+        area[isd_at..isd_at + isd_len].fill(0xFF);
+        area[new_isd_at..new_isd_at + isd_len].copy_from_slice(&config);
+        let mut e = t[1].raw;
+        put32(&mut e, 4, new_isd_at as u32);
+        let hc = crc16(&e[2..]);
+        put16(&mut e, 0, hc);
+        area[0x40..0x60].copy_from_slice(&enc(&e, 0xFFFF));
     }
     let mut e = t[0].raw;
     put16(&mut e, 2, crc16(boot));
@@ -295,8 +319,8 @@ pub fn build_boot_area(flash: &[u8], boot: &[u8]) -> Result<Vec<u8>, FormatError
     area[0x20..0x40].copy_from_slice(&enc(&e, 0xFFFF));
     let mut stored = enc(&boot[..16], 0xFFFF);
     stored.extend(enc(&boot[16..], 0xFFFF));
-    stored.resize(ISD_AT - BOOT_AT, 0xFF);
-    area[BOOT_AT..ISD_AT].copy_from_slice(&stored);
+    stored.resize(new_isd_at - BOOT_AT, 0xFF);
+    area[BOOT_AT..new_isd_at].copy_from_slice(&stored);
     Ok(area)
 }
 
@@ -398,5 +422,92 @@ mod tests {
         assert_eq!(crc16(b"123456789"), 0x31C3); // CRC16/XMODEM check value
         let x = enc(b"hello world", 0xFFFF);
         assert_eq!(enc(&x, 0xFFFF), b"hello world");
+    }
+
+    fn boot_container(len: usize) -> Vec<u8> {
+        let mut boot = vec![0xA5; len];
+        put16(&mut boot, 0, 1);
+        put16(&mut boot, 2, (len - 16) as u16);
+        put32(&mut boot, 8, 16);
+        let crc = crc16(&boot[16..]);
+        put16(&mut boot, 12, crc);
+        let crc = crc16(&boot[..14]);
+        put16(&mut boot, 14, crc);
+        boot
+    }
+
+    fn boot_entry(name: &str, addr: usize, len: usize, crc: u16) -> Vec<u8> {
+        let mut e = [0u8; 32];
+        put16(&mut e, 2, crc);
+        put32(&mut e, 4, addr as u32);
+        put32(&mut e, 8, len as u32);
+        e[16..16 + name.len()].copy_from_slice(name.as_bytes());
+        let crc = crc16(&e[2..]);
+        put16(&mut e, 0, crc);
+        enc(&e, 0xFFFF)
+    }
+
+    fn boot_image(boot: &[u8], isd_at: usize) -> Vec<u8> {
+        let mut flash = vec![0xFF; BOOT_AREA];
+        let mut header = [0u8; 32];
+        let crc = crc16(&header[2..]);
+        put16(&mut header, 0, crc);
+        flash[..32].copy_from_slice(&enc(&header, 0xFFFF));
+        flash[0x20..0x40].copy_from_slice(&boot_entry("uboot.boot", BOOT_AT, boot.len(), crc16(boot)));
+        let config: Vec<u8> = (0..0x2BB).map(|i| i as u8).collect();
+        flash[0x40..0x60].copy_from_slice(&boot_entry("isd_config.ini", isd_at, config.len(), crc16(&config)));
+        flash[0x60..0x80].copy_from_slice(&boot_entry("app_dir_head", BOOT_AREA, 0, 0));
+        flash[BOOT_AT..BOOT_AT + 16].copy_from_slice(&enc(&boot[..16], 0xFFFF));
+        flash[BOOT_AT + 16..BOOT_AT + boot.len()].copy_from_slice(&enc(&boot[16..], 0xFFFF));
+        flash[isd_at..isd_at + config.len()].copy_from_slice(&config);
+        flash
+    }
+
+    #[test]
+    fn boot_area_uses_the_config_address_in_the_table() {
+        for (boot_len, isd_at) in [(0x3830, 0x38D0), (0x3898, 0x3938), (0x3899, 0x3939)] {
+            let boot = boot_container(boot_len);
+            let flash = boot_image(&boot, isd_at);
+            assert_eq!(build_boot_area(&flash, &boot).unwrap(), flash);
+            let smaller = boot_container(0x3300);
+            let replaced = build_boot_area(&flash, &smaller).unwrap();
+            assert_eq!(stored_bootloader(&replaced).unwrap(), smaller);
+            assert_eq!(&replaced[isd_at..], &flash[isd_at..]);
+            assert_eq!(boot_table(&replaced)[1].addr as usize, isd_at);
+        }
+    }
+
+    #[test]
+    fn larger_bootloader_moves_and_preserves_the_units_config() {
+        let flash = boot_image(&boot_container(0x3830), 0x38D0);
+        let boot = boot_container(0x3898);
+        let replaced = build_boot_area(&flash, &boot).unwrap();
+        let config = &boot_table(&replaced)[1];
+        assert_eq!(config.addr, 0x3938);
+        assert_eq!(config.data_crc, boot_table(&flash)[1].data_crc);
+        assert_eq!(&replaced[0x3938..0x3938 + config.len as usize], &flash[0x38D0..0x38D0 + config.len as usize]);
+        assert_eq!(stored_bootloader(&replaced).unwrap(), boot);
+        assert_eq!(&replaced[..0x20], &flash[..0x20]);
+        assert_eq!(&replaced[0x60..BOOT_AT], &flash[0x60..BOOT_AT]);
+        assert_eq!(&replaced[0x3938 + config.len as usize..], &flash[0x3938 + config.len as usize..]);
+    }
+
+    #[test]
+    fn boot_area_refuses_unsafe_config_locations() {
+        let boot = boot_container(0x3830);
+        for (at, len) in [(BOOT_AT - 1, 1), (0x38CF, 0x2BB), (0x38D0, 0), (BOOT_AREA, 1), (0xFFFF_FFFF, 0xFFFF_FFFF)] {
+            let mut flash = boot_image(&boot, 0x38D0);
+            flash[0x40..0x60].copy_from_slice(&boot_entry("isd_config.ini", at, len, 0));
+            assert!(build_boot_area(&flash, &boot).is_err(), "config at 0x{at:X}, length 0x{len:X}");
+        }
+        assert!(build_boot_area(&[], &boot).is_err());
+    }
+
+    #[test]
+    fn bootloader_and_config_must_fit_without_overwriting_other_data() {
+        let mut flash = boot_image(&boot_container(0x3830), 0x38D0);
+        assert!(build_boot_area(&flash, &boot_container(BOOT_AREA - BOOT_AT)).is_err());
+        flash[0x3B90] = 0;
+        assert!(build_boot_area(&flash, &boot_container(0x3898)).is_err());
     }
 }

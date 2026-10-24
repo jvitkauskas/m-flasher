@@ -42,6 +42,7 @@ fn region_color(r: Region) -> Color32 {
         Region::Pairings => hex(0x6f97cf),
         Region::Calibration => hex(0xf0e8d2),
         Region::Presets => hex(0xbd6e2a),
+        Region::Sequences => hex(0x9e85c5),
         Region::Sounds => hex(0xc6717a),
         Region::Mac => hex(0x8f8b86),
         Region::Free => hex(0x3a3532),
@@ -596,7 +597,7 @@ impl App {
                 continue;
             }
             let x = 938.0 + (idx % 3) as f32 * 190.0;
-            let y = 762.0 + (idx / 3) as f32 * 28.0;
+            let y = 762.0 + (idx / 3) as f32 * 24.0;
             idx += 1;
             let sq = board.r(x, y - 9.5, 19.0, 19.0);
             if reg == Region::Free { hatch(p, sq, 1.4) } else { p.rect(sq, region_color(reg)) }

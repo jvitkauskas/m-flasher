@@ -1,10 +1,11 @@
 //! Tests against a simulated unit with NOR flash behaviour. The tests with real
 //! flash images and M-VAVE packages need FLASHER_TEST_DATA (a folder with
 //! smk37-stock.bin, smk37-snoop37.bin, smk37-baudgirl.bin, fm1-stock.bin,
-//! smk37-016.fwsc, fm1-015.fwsc); they are skipped without it.
+//! smk37-016.fwsc, fm1-015.fwsc, fm1-016.fwsc); they are skipped without it.
 
-use crate::boards::{Analysis, FM1, SMK37};
-use crate::formats::{AppStatus, BOOT_AREA, Package, app_files_status, bootloader_identity, build_boot_area, stored_bootloader};
+use crate::boards::{Analysis, CHIP_KEY, FLASH_SIZE, FM1, SMK37};
+use crate::formats::{AppStatus, BOOT_AREA, Package, app_files_status, app_table, boot_table, bootloader_identity,
+                     build_boot_area, crc16, enc, stored_bootloader};
 use crate::jl::Flash;
 use crate::ops::{Error, Plan, Session, bundled_bootloader};
 use crate::scsi::ScsiError;
@@ -93,7 +94,9 @@ fn session(mem: Vec<u8>) -> Session<FakeFlash> {
 }
 
 fn session_with(f: FakeFlash) -> Session<FakeFlash> {
-    let dir = std::env::temp_dir().join(format!("mflasher-test-{}", std::process::id()));
+    static NEXT_SESSION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let id = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("mflasher-test-{}-{id}", std::process::id()));
     Session::open(f, dir, &mut |_| {}, &mut |_, _| {}).ok().unwrap()
 }
 
@@ -127,6 +130,61 @@ fn bundled_bootloaders() {
         assert_eq!(bootloader_identity(boot).unwrap().0, b.tag);
         assert!(0xA0 + boot.len() <= 0x38D0);
     }
+}
+
+/// The FM-1 016 directory, with small synthetic files, so its layout and all
+/// three file CRCs are exercised even without the vendor's package.
+fn fm1_016_image() -> Vec<u8> {
+    let mut flash = vec![0xFF; FLASH_SIZE];
+    let mut app = vec![0xFF; 0x1C0];
+    let files: [(&str, usize, &[u8]); 3] = [
+        ("app.bin", 0x140, b"FM-1_016\0"), ("cfg_tool.bin", 0x160, b"config"), ("DX7.bin", 0x180, &[0x5A; 64]),
+    ];
+    let mut entries = vec![("app_area_head", 0x83, 0x02000140, app.len(), 0)];
+    for &(name, at, data) in &files {
+        app[at..at + data.len()].copy_from_slice(data);
+        entries.push((name, 0x82, at, data.len(), crc16(data)));
+    }
+    entries.extend([
+        ("VM", 0x12, 0xBA000, 0x20000, 0xFFFF), ("PRCT", 0x92, 0, 0xA9000, 0xFFFF),
+        ("SEQ64", 0x92, 0xDA000, 0x12000, 0xFFFF), ("BTIF", 0x92, 0xEC000, 0x1000, 0xFFFF),
+    ]);
+    for (i, (name, attr, addr, len, dcrc)) in entries.iter().enumerate() {
+        let mut e = [0u8; 32];
+        e[2..4].copy_from_slice(&dcrc.to_le_bytes());
+        e[4..8].copy_from_slice(&(*addr as u32).to_le_bytes());
+        e[8..12].copy_from_slice(&(*len as u32).to_le_bytes());
+        e[12] = *attr;
+        e[16..16 + name.len()].copy_from_slice(name.as_bytes());
+        let crc = crc16(&e[2..]);
+        e[..2].copy_from_slice(&crc.to_le_bytes());
+        app[i * 32..(i + 1) * 32].copy_from_slice(&e);
+    }
+    for (i, block) in app.chunks(32).enumerate() {
+        flash[BOOT_AREA + i * 32..BOOT_AREA + (i + 1) * 32].copy_from_slice(&enc(block, CHIP_KEY ^ (i * 8) as u16));
+    }
+    flash
+}
+
+#[test]
+fn fm1_016_identification_map_and_dx7_checksum() {
+    let mut flash = fm1_016_image();
+    let a = Analysis::new(&flash, Some(FM1.flash_id), CHIP_KEY);
+    assert_eq!(a.board, Some(&FM1));
+    assert!(a.certain);
+    assert_eq!(a.firmware_text, "FM-1 016 (stock)");
+    assert_eq!(a.app_status, AppStatus::Ok);
+    assert_eq!(Analysis::new(&flash, None, CHIP_KEY).board, Some(&FM1), "backups have no flash chip ID");
+    assert!(!Analysis::new(&flash, Some(SMK37.flash_id), CHIP_KEY).certain);
+    let map = sector_map(&flash, CHIP_KEY, Some(&FM1));
+    assert_eq!(region_ranges(&map, Region::Firmware), "04-A8");
+    assert_eq!(region_ranges(&map, Region::Settings), "BA-D9");
+    assert_eq!(region_ranges(&map, Region::Sequences), "DA-EB");
+    assert_eq!(region_ranges(&map, Region::Pairings), "EC");
+    assert_eq!(region_ranges(&map, Region::Sounds), "");
+    assert_eq!(region_ranges(&map, Region::Free), "A9-B9, ED-FE");
+    flash[BOOT_AREA + 0x180] ^= 1;
+    assert_eq!(app_files_status(&flash, CHIP_KEY), AppStatus::BadCrc, "DX7.bin is checked along with app.bin and cfg_tool.bin");
 }
 
 #[test]
@@ -198,6 +256,100 @@ fn package_boot_area_round_trip() {
     assert_eq!(build_boot_area(&pkg.flash, &boot).unwrap(), pkg.flash[..BOOT_AREA]);
     let fm = Package::parse(&need!("fm1-015.fwsc")).unwrap();
     assert_eq!(fm.model(), "FM-1");
+}
+
+#[test]
+fn fm1_016_vendor_package() {
+    let pkg = Package::parse(&need!("fm1-016.fwsc")).unwrap();
+    assert_eq!(pkg.identity, "FM-1_016");
+    assert_eq!(pkg.model(), "FM-1");
+    assert_eq!(pkg.flash.len(), 0xA9000);
+    assert_eq!(app_table(&pkg.flash, CHIP_KEY).iter().filter(|e| e.attr == 0x82).count(), 3);
+    assert_eq!(app_files_status(&pkg.flash, CHIP_KEY), AppStatus::Ok);
+    let a = Analysis::new(&pkg.flash, Some(FM1.flash_id), CHIP_KEY);
+    assert_eq!(a.board, Some(&FM1));
+    assert!(a.certain);
+    assert_eq!(a.firmware_text, "FM-1 016 (stock)");
+    let table = boot_table(&pkg.flash);
+    assert_eq!(table[1].addr, 0x3938);
+    let boot = stored_bootloader(&pkg.flash).unwrap();
+    assert_eq!(boot.len(), 0x3898);
+    assert_eq!(build_boot_area(&pkg.flash, &boot).unwrap(), pkg.flash[..BOOT_AREA]);
+}
+
+#[test]
+fn fm1_016_upgrade_wipe_and_downgrade() {
+    let raw = need!("fm1-016.fwsc");
+    let old_raw = need!("fm1-015.fwsc");
+    let old = need!("fm1-stock.bin");
+    let mut f = own(old.clone(), "fm1-016-upgrade");
+    f.id = FM1.flash_id;
+    let mut s = session_with(f);
+    let p = s.plan_firmware(&raw, false, false).unwrap();
+    assert_eq!(p.allowed, vec![(BOOT_AREA, 0xA9000)]);
+    assert!(!p.warnings.is_empty(), "the changed settings layout is reported");
+    assert_eq!(&p.target[..BOOT_AREA], &old[..BOOT_AREA]);
+    assert_eq!(&p.target[0xA9000..], &old[0xA9000..]);
+    let with_boot = s.plan_firmware(&raw, true, false).unwrap();
+    assert_eq!(with_boot.allowed, vec![(0, 0xA9000)]);
+    assert_eq!(with_boot.target[..0xA9000], Package::parse(&raw).unwrap().flash);
+    apply(&mut s, &p).unwrap();
+    assert_eq!(s.analysis.firmware_text, "FM-1 016 (stock)");
+    assert_eq!(s.analysis.app_status, AppStatus::Ok);
+    assert_eq!(std::fs::read(s.backup_path.as_ref().unwrap()).unwrap(), old);
+
+    let before_wipe = s.dev.mem.clone();
+    let p = s.plan_firmware(&raw, false, true).unwrap();
+    assert_eq!(p.allowed, vec![(BOOT_AREA, 0xA9000), (0xBA000, 0xDA000), (0xEC000, 0xED000)]);
+    assert!(p.target[0xBA000..0xDA000].iter().all(|&b| b == 0xFF));
+    assert!(p.target[0xEC000..0xED000].iter().all(|&b| b == 0xFF));
+    assert_eq!(&p.target[0xDA000..0xEC000], &before_wipe[0xDA000..0xEC000], "sequences are kept");
+    assert_eq!(&p.target[0xFF000..], &old[0xFF000..], "the unit's own factory data is kept");
+    apply(&mut s, &p).unwrap();
+
+    let p = s.plan_firmware(&old_raw, false, false).unwrap();
+    assert!(!p.warnings.is_empty());
+    apply(&mut s, &p).unwrap();
+    assert_eq!(s.analysis.firmware_text, "FM-1 015 (stock)");
+    assert_eq!(s.analysis.app_status, AppStatus::Ok);
+    assert_eq!(&s.dev.mem[BOOT_AREA..0x93000], &old[BOOT_AREA..0x93000]);
+
+    let smk = session(need!("smk37-stock.bin"));
+    assert!(matches!(smk.plan_firmware(&raw, false, false), Err(Error::Refused(_))));
+    s.dev.key = 0x1234;
+    assert!(matches!(s.plan_firmware(&raw, false, false), Err(Error::Refused(_))));
+}
+
+#[test]
+fn fm1_016_bootloader_replacement_on_both_layouts() {
+    let raw = need!("fm1-016.fwsc");
+    let pkg = Package::parse(&raw).unwrap();
+    let stock_boot = stored_bootloader(&pkg.flash).unwrap();
+    let mut new = pkg.flash.clone();
+    new.resize(FLASH_SIZE, 0xFF);
+    for original in [need!("fm1-stock.bin"), new] {
+        let original_config = &boot_table(&original)[1];
+        let at = original_config.addr as usize;
+        let len = original_config.len as usize;
+        let mut f = own(original.clone(), "fm1-016-bootloader");
+        f.id = FM1.flash_id;
+        let mut s = session_with(f);
+        let p = s.plan_bootloader(None, Some(&raw)).unwrap();
+        assert_eq!(p.allowed, vec![(0, BOOT_AREA)]);
+        assert_eq!(&p.target[BOOT_AREA..], &original[BOOT_AREA..]);
+        assert_eq!(&p.target[0x3938..0x3938 + len], &original[at..at + len]);
+        apply(&mut s, &p).unwrap();
+        assert_eq!(stored_bootloader(&s.dev.mem).unwrap(), stock_boot);
+        let stock = s.dev.mem.clone();
+
+        let p = s.plan_bootloader(None, None).unwrap();
+        apply(&mut s, &p).unwrap();
+        assert_eq!(bootloader_identity(&stored_bootloader(&s.dev.mem).unwrap()).unwrap().0, "fm1");
+        assert_eq!(&s.dev.mem[0x3938..], &stock[0x3938..]);
+        let p = s.plan_bootloader(None, Some(&raw)).unwrap();
+        apply(&mut s, &p).unwrap();
+        assert_eq!(s.dev.mem, stock);
+    }
 }
 
 #[test]
