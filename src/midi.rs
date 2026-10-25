@@ -14,9 +14,9 @@
 
 pub const SOFT_KEY: [u8; 6] = [0xF0, 0x22, 0x24, 0x35, 0x7D, 0xF7];
 
-/// Names under which the units appear on USB MIDI. Nothing else is ever sent
-/// the soft key.
-const NAMES: [&str; 3] = ["FM-1", "SMK-37", "Felucca"];
+/// Names under which the units appear on USB MIDI, each unit with the
+/// spellings its name may take. Nothing else is ever sent the soft key.
+const NAMES: [(&str, &[&str]); 3] = [("FM-1", &["FM-1", "FM1"]), ("SMK-37", &["SMK-37", "SMK37"]), ("Felucca", &["Felucca"])];
 
 /// A unit found on USB MIDI.
 pub struct MidiUnit {
@@ -25,9 +25,14 @@ pub struct MidiUnit {
     port: sys::Port,
 }
 
-fn known(name: &str) -> bool {
+/// Which unit a MIDI name is, if any.
+fn unit_of(name: &str) -> Option<&'static str> {
     let n = name.to_ascii_lowercase();
-    NAMES.iter().any(|k| n.contains(&k.to_ascii_lowercase()))
+    NAMES.iter().find(|(_, spellings)| spellings.iter().any(|k| n.contains(&k.to_ascii_lowercase()))).map(|(unit, _)| *unit)
+}
+
+fn known(name: &str) -> bool {
+    unit_of(name).is_some()
 }
 
 /// The units on USB MIDI, each by its first port.
@@ -49,11 +54,11 @@ impl MidiUnit {
 /// "MIDIOUT2 (...)", ...), and only that one answers the soft key.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 fn first_ports(names: &[String]) -> Vec<usize> {
-    let mut chosen: Vec<(String, usize, u8)> = vec![];
+    let mut chosen: Vec<(&str, usize, u8)> = vec![];
     for (i, name) in names.iter().enumerate() {
-        if !known(name) {
+        let Some(unit) = unit_of(name) else {
             continue;
-        }
+        };
         let lower = name.to_ascii_lowercase();
         let rank = if lower.contains("private") {
             0
@@ -62,7 +67,6 @@ fn first_ports(names: &[String]) -> Vec<usize> {
         } else {
             2
         };
-        let unit = NAMES.iter().find(|k| lower.contains(&k.to_ascii_lowercase())).unwrap().to_string();
         match chosen.iter_mut().find(|c| c.0 == unit) {
             Some(c) if rank < c.2 => *c = (unit, i, rank),
             Some(_) => {}
@@ -415,6 +419,9 @@ mod tests {
         let l = names(&["SMK-37 Pro-Master", "SMK-37 Pro-Private", "SMK-37 Pro-MCP", "FM-1 MIDI 1"]);
         assert_eq!(first_ports(&l), vec![1, 3]);
         assert!(first_ports(&names(&["Launchpad", "MIDI Through Port-0"])).is_empty());
+        // spelled without the dash, still one port per unit
+        let d = names(&["SMK37 Elite", "MIDIOUT2 (SMK37 Elite)", "FM1_MONITOR", "MIDIMON FM-1"]);
+        assert_eq!(first_ports(&d).len(), 2);
     }
 
     #[test]
@@ -423,6 +430,7 @@ mod tests {
                  3 [SMK37Elite     ]: USB-Audio - SMK-37 Elite\n                      M-VAVE SMK-37 Elite at usb-0000:00:14.0-2, full speed\n";
         assert_eq!(asound_cards(t), vec![(0, "HDA Intel PCH".to_string()), (3, "SMK-37 Elite".to_string())]);
         assert!(known("SMK-37 Elite") && known("FM-1") && known("Felucca Update") && !known("HDA Intel PCH"));
+        assert!(known("SMK37 Pro") && known("FM1_MONITOR") && known("MIDIMON FM-1"));
     }
 
     /// On Linux with a sequencer: `aseqdump` (from alsa-utils) shows its port,
