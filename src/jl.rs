@@ -37,6 +37,22 @@ const USB_BUFFER_SIZE: u16 = 0xFC14;
 /// Read RAM through a program of the user's (`run-ram`); the program implements it.
 const READ_RAM: u16 = 0xFD61;
 
+/// `restart`'s program (pi32v2-isa tools/hwtest/app/reset.S, MIT-0), position
+/// independent: clears the download-mode marker at 0x01C7FD80 (m-bootloader's
+/// SPEC §4.2) and requests a software reset (power control 0x10000, bit 4,
+/// SPEC §2.2); the unit then boots its application.
+///
+/// ```text
+///   r4 = 0x01C7FD80; r1 = 0; [r4+0] = r1; [r4+4] = r1; [r4+8] = r1; [r4+12] = r1; csync
+///   r4 = 0x10000; r1 = [r4+0]; r2 = 16; r1 |= r2; [r4+0] = r1; csync
+/// 1: goto 1b
+/// ```
+pub const RESTART: [u8; 34] = [
+    0xc4, 0xff, 0x80, 0xfd, 0xc7, 0x01, 0x41, 0x20, 0xc1, 0x60, 0xc1, 0x61, 0xc1, 0x62, 0xc1, 0x63,
+    0x20, 0x00, 0x60, 0xe0, 0x80, 0x4b, 0x41, 0x60, 0x42, 0x30, 0x21, 0x19, 0xc1, 0x60, 0x20, 0x00,
+    0xf7, 0x9f,
+];
+
 /// The RAM `run-ram` may write: the flash loader's two 32 KiB slots, the only
 /// RAM known to be safe (m-bootloader's SPEC §1, §10).
 pub const RAM_START: u32 = 0x01C2_0000;
@@ -298,6 +314,24 @@ impl<S: Scsi> Connection<S> {
         }
         let scrambled: Vec<Vec<u8>> = image.chunks(512).map(|b| crc_cipher(b, 0xFFFF_FFFF)).collect();
         self.upload_and_jump(addr, &scrambled)
+    }
+
+    /// `restart`: leaves download mode. Uploads RESTART to the slot a running
+    /// loader of ours is not in and jumps to it; the unit resets as it runs, so
+    /// the jump's answer may be lost: only the upload's errors are errors.
+    /// Returns the address used.
+    pub fn restart(&mut self) -> Result<u32, ScsiError> {
+        let addr = match self.identify() {
+            Some((_, at)) if at == OWN_B.0 => OWN_A.0,
+            _ => OWN_B.0,
+        };
+        let block = crc_cipher(&RESTART, 0xFFFF_FFFF);
+        self.dev.execute(&cdb(WRITE_MEMORY, &addr_len_crc(addr, &block)), Data::Out(&block))?;
+        let mut args = addr.to_be_bytes().to_vec();
+        args.extend(LOADER_ARG.to_be_bytes());
+        let mut resp = [0u8; 16];
+        let _ = self.dev.execute(&cdb(JUMP, &args), Data::In(&mut resp));
+        Ok(addr)
     }
 
     /// `run-ram`: sends the program a command and returns its 16-byte answer

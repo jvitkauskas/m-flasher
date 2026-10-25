@@ -727,3 +727,25 @@ fn run_ram_command_line_checks() {
     assert!(new(&[], Some("01C20000:99999999999"), Some("o")).is_err());
     assert!(new(&[], Some("FFFFFFF0:32"), Some("o")).is_err(), "past the end of the address space");
 }
+
+#[test]
+fn restart_uploads_the_reset_program_and_jumps_to_it() {
+    let mut c = ram_unit(MockRom::default());
+    assert_eq!(c.restart().unwrap(), 0x01C2_8000);
+    let cmds = sent(&c);
+    assert_eq!(cmds.len(), 2, "one block and the jump");
+    assert_eq!(crc_cipher(&cmds[0].1, 0xFFFF_FFFF), crate::jl::RESTART);
+    assert_eq!(cmds[1].0, cdb16(&[0xFB, 0x08, 0x01, 0xC2, 0x80, 0x00, 0x00, 0x01]));
+    // the same upload as run-ram's
+    let mut r = ram_unit(MockRom::default());
+    r.run_ram(0x01C2_8000, &crate::jl::RESTART).unwrap();
+    assert_eq!(sent(&r), cmds);
+}
+
+#[test]
+fn restart_avoids_the_running_loader() {
+    let mut c = ram_unit(MockRom { loader: Some(("1.0", 0x01C2_8000)), ..Default::default() });
+    assert_eq!(c.restart().unwrap(), 0x01C2_0000);
+    let mut c = ram_unit(MockRom { loader: Some(("1.0", 0x01C2_0000)), ..Default::default() });
+    assert_eq!(c.restart().unwrap(), 0x01C2_8000);
+}
