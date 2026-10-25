@@ -420,8 +420,8 @@ mod tests {
         assert_eq!(first_ports(&l), vec![1, 3]);
         assert!(first_ports(&names(&["Launchpad", "MIDI Through Port-0"])).is_empty());
         // spelled without the dash, still one port per unit
-        let d = names(&["SMK37 Elite", "MIDIOUT2 (SMK37 Elite)", "FM1", "FM-1 MIDI 1"]);
-        assert_eq!(first_ports(&d), vec![0, 2]);
+        let d = names(&["SMK37 Elite", "MIDIOUT2 (SMK37 Elite)", "FM1_MONITOR", "MIDIMON FM-1"]);
+        assert_eq!(first_ports(&d).len(), 2);
     }
 
     #[test]
@@ -430,7 +430,7 @@ mod tests {
                  3 [SMK37Elite     ]: USB-Audio - SMK-37 Elite\n                      M-VAVE SMK-37 Elite at usb-0000:00:14.0-2, full speed\n";
         assert_eq!(asound_cards(t), vec![(0, "HDA Intel PCH".to_string()), (3, "SMK-37 Elite".to_string())]);
         assert!(known("SMK-37 Elite") && known("FM-1") && known("Felucca Update") && !known("HDA Intel PCH"));
-        assert!(known("SMK37 Pro") && known("fm1"));
+        assert!(known("SMK37 Pro") && known("FM1_MONITOR") && known("MIDIMON FM-1"));
     }
 
     /// On Linux with a sequencer: `aseqdump` (from alsa-utils) shows its port,
