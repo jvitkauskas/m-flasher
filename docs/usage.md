@@ -67,7 +67,10 @@ in download mode from its keys: use **DOWNLOAD MODE**. If the firmware does
 not start, the USB_KEY dongle (a Raspberry Pi Pico) still reaches download
 mode.
 
-When you are done, unplug the unit and switch it off and on again.
+When you are done, unplug the unit and switch it off and on again, or run
+`m-flasher restart`: it resets the unit from download mode, without touching
+the flash, and waits for the firmware to show up on USB MIDI (the SMK-37's
+stock firmware takes about half a minute).
 
 ## The actions
 
@@ -104,6 +107,7 @@ The same executable is a command-line tool when given arguments:
 ```sh
 m-flasher find                 # the units in download mode (and those running, on USB MIDI)
 m-flasher download-mode        # switch a running unit to download mode over USB MIDI
+m-flasher restart              # leave download mode: the unit resets and starts its firmware
 m-flasher info                 # what is on the unit
 m-flasher backup [DIR]
 m-flasher restore BACKUP.bin
@@ -113,7 +117,8 @@ m-flasher run-ram IMAGE --addr 0x01C28000 [--call FC60]... [--read ADDR:LEN -o O
 ```
 
 Options: `--device PATH` (with more than one unit), `--board fm1|smk37` (when
-the model is uncertain), `--backup-dir DIR`, `--yes`. Changes are shown first
+the model is uncertain), `--backup-dir DIR`, `--yes`, and `--restart` (restore,
+firmware and bootloader: start the unit once written). Changes are shown first
 and need a typed `yes`, or `--yes`.
 
 - Windows: run `M-Flasher.exe` from an administrator prompt.

@@ -10,6 +10,8 @@ m-flasher \- back up, restore and reinstall the firmware of M-VAVE FM-1 and SMK-
 |
 .B download\-mode
 |
+.B restart
+|
 .B info
 |
 .B backup
@@ -72,6 +74,11 @@ List the units in download mode, and those running, on USB MIDI.
 Switch the unit that is running, connected over USB MIDI, to download mode:
 send it the SysEx F0 22 24 35 7D F7 and wait for it to come back.
 .TP
+.B restart
+Leave download mode: upload a short program to the chip's RAM that resets
+the unit, which then starts its firmware; the flash is not touched. Waits up
+to 60 s for the firmware on USB MIDI.
+.TP
 .B info
 Read the unit's flash and show the model, firmware and bootloader.
 .TP
@@ -124,6 +131,12 @@ Where backups go (default: ~/Documents/M-Flasher/backups).
 .TP
 .B \-\-yes
 Do not ask before writing.
+.TP
+.B \-\-restart
+With
+.BR restore ", " firmware " and " bootloader :
+leave download mode once written, as
+.BR restart .
 .SH FILES
 .TP
 .I /usr/lib/udev/rules.d/70-m-flasher.rules
