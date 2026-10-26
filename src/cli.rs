@@ -118,7 +118,8 @@ fn download_mode() -> Result<(), Error> {
 }
 
 /// Leave download mode: the unit at `path` resets and boots its application.
-/// Waits for it to leave USB, then up to 20 s for it on USB MIDI.
+/// Waits for it to leave USB, then up to 60 s for it on USB MIDI: the SMK-37's
+/// stock firmware takes about half a minute to settle on USB.
 fn restart(path: &str) -> Result<(), Error> {
     let mut c = Connection::open(path, Device::open(path)?)?;
     let addr = c.restart()?;
@@ -131,7 +132,7 @@ fn restart(path: &str) -> Result<(), Error> {
     if !gone {
         return Err(Error::Refused(format!("{path} is still in download mode: the unit did not reset")));
     }
-    for _ in 0..40 {
+    for _ in 0..120 {
         std::thread::sleep(std::time::Duration::from_millis(500));
         if let Some(u) = crate::midi::find_units().into_iter().next() {
             println!("Running: the {} is on USB MIDI", u.name);
@@ -143,7 +144,7 @@ fn restart(path: &str) -> Result<(), Error> {
                  (none installed, not valid, or the bootloader is waiting: see the unit's screen)")));
         }
     }
-    println!("Left download mode; the application has not shown up on USB MIDI within 20 s \
+    println!("Left download mode; the application has not shown up on USB MIDI within 60 s \
               (not every application has USB: look at the unit)");
     Ok(())
 }
