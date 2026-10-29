@@ -86,7 +86,10 @@ Use the official `.fwsc` files from M-VAVE's website as they are: no
 conversion is needed. FM-1 **016** is supported, including its DX7 data file
 and new settings and sequencer layout. Erasing settings clears settings and
 Bluetooth pairings at the addresses declared by the package; saved sequences
-are kept. When switching between 015 and 016, the app warns about the changed
+are kept. The window starts with **Also erase settings and Bluetooth
+pairings** ticked, because custom firmwares do not always read each other's
+data correctly; untick it to keep them when reinstalling the same firmware (the
+command line erases them only with `--wipe-settings`). When switching between 015 and 016, the app warns about the changed
 data layout. Restore a backup to return to the earlier firmware with its data.
 
 Backups go to `Documents/M-Flasher/backups` in your home folder; the

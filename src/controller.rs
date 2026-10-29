@@ -197,7 +197,9 @@ impl Controller {
                 open_version: open_version.clone(),
                 mode: Mode::Firmware,
                 files: HashMap::new(),
-                wipe: false,
+                // the erase-settings box starts ticked: custom firmwares do not always read each
+                // other's settings and pairings correctly
+                wipe: true,
                 with_boot: false,
                 boot_source: BootSource::Open,
                 midi: None,
