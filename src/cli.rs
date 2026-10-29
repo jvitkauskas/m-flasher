@@ -1,11 +1,12 @@
 //! Command-line mode (the same operations as the window):
 //!
 //! ```text
-//! m-flasher find | download-mode | info | backup [DIR] | restore BACKUP.bin
+//! m-flasher find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin
 //!           firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings]
 //!           bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot]
 //!           run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT]
 //! options:  --device PATH  --board fm1|smk37  --backup-dir DIR  --yes
+//!           --restart (restore, firmware, bootloader: start the unit afterwards)
 //! ```
 
 use crate::jl::Connection;
@@ -14,11 +15,12 @@ use crate::scsi::{Device, find_devices};
 use std::io::Write;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: m-flasher [find | download-mode | info | backup [DIR] | restore BACKUP.bin |
+const USAGE: &str = "usage: m-flasher [find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin |
                  firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings] |
                  bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot] |
                  run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT]]
        options: --device PATH  --board fm1|smk37  --backup-dir DIR  --yes
+                --restart (restore, firmware, bootloader: start the unit when written)
        without arguments: the window (`m-flasher run-ram --help`: the run-ram command)";
 
 const RUN_RAM_HELP: &str = "usage: m-flasher run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT] [--device PATH]
@@ -113,6 +115,38 @@ fn download_mode() -> Result<(), Error> {
          use its keys instead (see the window's HOW TO CONNECT)",
         unit.name
     )))
+}
+
+/// Leave download mode: the unit at `path` resets and boots its application.
+/// Waits for it to leave USB, then up to 60 s for it on USB MIDI: the SMK-37's
+/// stock firmware takes about half a minute to settle on USB.
+fn restart(path: &str) -> Result<(), Error> {
+    let mut c = Connection::open(path, Device::open(path)?)?;
+    let addr = c.restart()?;
+    drop(c);
+    println!("Sent the restart (a 34-byte program at 0x{addr:08X}); waiting for the unit to reset");
+    let gone = (0..20).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        !find_devices().iter().any(|(p, _)| p == path)
+    });
+    if !gone {
+        return Err(Error::Refused(format!("{path} is still in download mode: the unit did not reset")));
+    }
+    for _ in 0..120 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Some(u) = crate::midi::find_units().into_iter().next() {
+            println!("Running: the {} is on USB MIDI", u.name);
+            return Ok(());
+        }
+        if let Some((p, _)) = find_devices().into_iter().next() {
+            return Err(Error::Refused(format!(
+                "the unit reset and came back in download mode ({p}): its application did not start \
+                 (none installed, not valid, or the bootloader is waiting: see the unit's screen)")));
+        }
+    }
+    println!("Left download mode; the application has not shown up on USB MIDI within 60 s \
+              (not every application has USB: look at the unit)");
+    Ok(())
 }
 
 /// The unit to use: --device, or the one unit in download mode.
@@ -225,7 +259,7 @@ pub fn run(args: Vec<String>) -> i32 {
 
 fn main(args: Vec<String>) -> Result<(), Error> {
     let (mut pos, mut device, mut board, mut backup_dir, mut yes) = (vec![], None, None, default_backup_dir(), false);
-    let (mut with_boot, mut wipe, mut stock, mut file) = (false, false, None, None);
+    let (mut with_boot, mut wipe, mut stock, mut file, mut then_restart) = (false, false, None, None, false);
     let (mut ram_addr, mut calls, mut read_spec, mut output) = (None, vec![], None, None);
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
@@ -243,6 +277,7 @@ fn main(args: Vec<String>) -> Result<(), Error> {
             "--yes" => yes = true,
             "--with-bootloader" => with_boot = true,
             "--wipe-settings" => wipe = true,
+            "--restart" => then_restart = true,
             "--version" => {
                 println!("{}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
@@ -268,11 +303,25 @@ fn main(args: Vec<String>) -> Result<(), Error> {
     if cmd == "download-mode" {
         return download_mode();
     }
+    if cmd == "restart" {
+        if find_devices().is_empty() {
+            if let Some(u) = crate::midi::find_units().first() {
+                println!("The {} is running already (on USB MIDI)", u.name);
+                return Ok(());
+            }
+        }
+        let path = pick_device(device)?;
+        println!("Connecting to {path}");
+        return restart(&path);
+    }
     if !matches!(cmd.as_str(), "info" | "backup" | "restore" | "firmware" | "bootloader" | "run-ram") {
         return Err(Error::Refused(USAGE.into()));
     }
     if cmd != "run-ram" && (ram_addr.is_some() || !calls.is_empty() || read_spec.is_some() || output.is_some()) {
         return Err(Error::Refused(format!("--addr, --call, --read and -o are for run-ram\n{USAGE}")));
+    }
+    if then_restart && !matches!(cmd.as_str(), "restore" | "firmware" | "bootloader") {
+        return Err(Error::Refused(format!("--restart is for restore, firmware and bootloader\n{USAGE}")));
     }
     // checked before the unit is touched
     let ram = if cmd == "run-ram" {
@@ -318,16 +367,21 @@ fn main(args: Vec<String>) -> Result<(), Error> {
             _ => s.plan_bootloader(None, None)?,
         },
     };
-    confirm_and_apply(&mut s, &plan, yes)
+    if confirm_and_apply(&mut s, &plan, yes)? && then_restart {
+        drop(s);
+        return restart(&path);
+    }
+    Ok(())
 }
 
-fn confirm_and_apply<F: crate::jl::Flash>(s: &mut Session<F>, plan: &Plan, yes: bool) -> Result<(), Error> {
+/// False when the user declined: the unit is not to be restarted.
+fn confirm_and_apply<F: crate::jl::Flash>(s: &mut Session<F>, plan: &Plan, yes: bool) -> Result<bool, Error> {
     println!("\n{}", plan.describe());
     for w in &plan.warnings {
         println!("WARNING: {w}");
     }
     if plan.sectors.is_empty() {
-        return Ok(());
+        return Ok(true);
     }
     if !yes {
         print!("Type \"yes\" to write: ");
@@ -336,7 +390,7 @@ fn confirm_and_apply<F: crate::jl::Flash>(s: &mut Session<F>, plan: &Plan, yes: 
         std::io::stdin().read_line(&mut answer).ok();
         if answer.trim() != "yes" {
             println!("Nothing written.");
-            return Ok(());
+            return Ok(false);
         }
     }
     let total = plan.sectors.len() * crate::formats::SECTOR;
@@ -346,5 +400,6 @@ fn confirm_and_apply<F: crate::jl::Flash>(s: &mut Session<F>, plan: &Plan, yes: 
             done = done.max(a);
             let _ = total;
         }
-    }, &mut |m| println!("{m}"))
+    }, &mut |m| println!("{m}"))?;
+    Ok(true)
 }
