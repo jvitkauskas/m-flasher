@@ -676,8 +676,8 @@ impl App {
                     ("REVIEW", b, vec![("CANCEL", 0), ("WRITE", 2)])
                 }
                 Dialog::About => ("ABOUT", vec![
-                    (format!("M-Flasher {}: back up, restore and reinstall the firmware of the M-VAVE FM-1, Fame MiniFM and \
-                              SMK-37 Pro / Elite through the chip's USB download mode, and install m-bootloader.",
+                    (format!("M-Flasher {}: back up, restore and reinstall the firmware of the M-VAVE FM-1 and SMK-37 \
+                              Pro / Elite through the chip's USB download mode, and install m-bootloader.",
                              env!("CARGO_PKG_VERSION")), INK),
                     (String::new(), INK),
                     ("Bootloader and flash loader: m-bootloader (MIT). Protocol after jl-uboot-tool by \

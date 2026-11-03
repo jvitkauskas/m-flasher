@@ -17,8 +17,8 @@ pub const SOFT_KEY: [u8; 6] = [0xF0, 0x22, 0x24, 0x35, 0x7D, 0xF7];
 
 /// Names under which the units appear on USB MIDI, each unit with the
 /// spellings its name may take. Nothing else is ever sent the soft key.
-const NAMES: [(&str, &[&str]); 4] =
-    [("FM-1", &["FM-1", "FM1"]), ("MiniFM", &["MiniFM"]), ("SMK-37", &["SMK-37", "SMK37"]), ("Felucca", &["Felucca"])];
+const NAMES: [(&str, &[&str]); 3] =
+    [("FM-1", &["FM-1", "FM1", "MiniFM"]), ("SMK-37", &["SMK-37", "SMK37"]), ("Felucca", &["Felucca"])];
 
 /// A unit found on USB MIDI.
 pub struct MidiUnit {

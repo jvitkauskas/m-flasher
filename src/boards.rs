@@ -25,7 +25,7 @@ pub struct Board {
 
 pub static FM1: Board = Board {
     key: "fm1",
-    name: "FM-1 / MiniFM",
+    name: "FM-1",
     tag: "fm1",
     // the Fame MiniFM is an FM-1 by another name: its packages have the same
     // chip key, layout and boot area, so each can install the other's
