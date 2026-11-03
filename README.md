@@ -1,7 +1,8 @@
 # M-Flasher
 
-Back up, restore and reinstall the firmware of an **M-VAVE FM-1** or **SMK-37
-Pro / Elite** over USB, and install
+Back up, restore and reinstall the firmware of an **M-VAVE FM-1** (or its
+rebranded twin, the **Fame MiniFM**) or **SMK-37 Pro / Elite** over USB, and
+install
 [m-bootloader](https://github.com/jvitkauskas/m-bootloader). It talks to
 the chip's built-in USB download mode, so it also works when the firmware on
 the unit is broken. For Windows, macOS and Linux.

@@ -331,9 +331,10 @@ impl<F: Flash> Session<F> {
         }
         let (mut notes, mut warnings) = (vec![], vec![]);
         if let Some(m) = &self.analysis.model_name {
-            if m.starts_with("SMK-37 ") && m != pkg.model() {
+            if m != "SMK-37+VA" && m != pkg.model() {
                 warnings.push(format!("The unit runs {m} firmware; this package is for the {}. The unit will then \
-                                       report itself as that model.", pkg.model()));
+                                       report itself as that model, and M-UPGRADE will only take that model's \
+                                       packages.", pkg.model()));
             }
         }
         let regions = |img: &[u8]| -> Vec<(String, u32, u32)> {

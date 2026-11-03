@@ -104,3 +104,12 @@ Windows and macOS not yet tried.
 
 FM-1 016 compatibility has been checked with the vendor package and simulated
 flash, and installing 016 with M-Flasher has been tested on a unit.
+
+Fame MiniFM support comes from comparing its
+[`MiniFM_016` package](https://images.musicstore.de/assets/downloads/fame/Fame-Mini-FM/MiniFM.zip)
+(`MiniFM_016.fwsc`, SHA-256
+`f10b297b3f0e1789110ba1832b12865b7fc39d5d6e0e7c9a375461339268ca77`) with FM-1 016:
+the same chip key, region addresses and boot area, and the soft key handled by
+the same code. Cross-flashing has been tested with both packages against
+simulated flash only, **not yet on a MiniFM**, and the soft key on its firmware
+015 is unconfirmed. The optional test data can include it as `minifm-016.fwsc`.

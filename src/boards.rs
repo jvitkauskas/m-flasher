@@ -25,9 +25,11 @@ pub struct Board {
 
 pub static FM1: Board = Board {
     key: "fm1",
-    name: "FM-1",
+    name: "FM-1 / MiniFM",
     tag: "fm1",
-    models: &["FM-1"],
+    // the Fame MiniFM is an FM-1 by another name: its packages have the same
+    // chip key, layout and boot area, so each can install the other's
+    models: &["FM-1", "MiniFM"],
     flash_id: 0x856014,
     factory: &[KEY_MAC],
 };
@@ -243,7 +245,7 @@ fn find_after(hay: &[u8], prefix: &[u8], ok: impl Fn(u8) -> bool) -> Option<Stri
 
 /// ("SMK-37 Pro", "016") for every "MODEL_NNN" identity in the text.
 fn find_identities(text: &[u8]) -> Vec<(String, String)> {
-    const MODELS: [&[u8]; 4] = [b"FM-1", b"SMK-37 Pro", b"SMK-37 Elite", b"SMK-37+VA"];
+    const MODELS: [&[u8]; 5] = [b"FM-1", b"MiniFM", b"SMK-37 Pro", b"SMK-37 Elite", b"SMK-37+VA"];
     let mut out = vec![];
     for m in MODELS {
         let mut i = 0;

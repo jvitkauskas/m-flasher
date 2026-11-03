@@ -92,6 +92,12 @@ data correctly; untick it to keep them when reinstalling the same firmware (the
 command line erases them only with `--wipe-settings`). When switching between 015 and 016, the app warns about the changed
 data layout. Restore a backup to return to the earlier firmware with its data.
 
+The **Fame MiniFM** is treated as an FM-1, and either's package installs on the
+other: `MiniFM_016` and `FM-1_016` have the same chip key, data layout and boot
+area. The app warns before such a cross-flash, because the unit then reports
+itself as the other model and M-UPGRADE only accepts that model's packages. The
+backup made before the write brings the original firmware back.
+
 Backups go to `Documents/M-Flasher/backups` in your home folder; the
 **Backups** link at the top of the window opens it.
 
