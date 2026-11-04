@@ -10,7 +10,7 @@
 use crate::boards::{Analysis, BOARDS, Board, CHIP_KEY, FLASH_SIZE, flash_tested};
 use crate::formats::{
     AppStatus, BOOT_AREA, Package, SECTOR, app_files_status, crc32, app_table, bankcb_check, bootloader_identity,
-    build_boot_area, config_sys_clk, stored_bootloader,
+    build_boot_area, build_short_boot_area, config_sys_clk, reads_config, stored_bootloader,
 };
 use crate::jl::{Flash, Show};
 use crate::scsi::ScsiError;
@@ -382,12 +382,16 @@ impl<F: Flash> Session<F> {
     /// from a package's boot area.
     pub fn plan_bootloader(&self, boot: Option<&[u8]>, package: Option<&[u8]>) -> Result<Plan, Error> {
         let board = self.need_board()?;
+        // the package's whole boot area, with the stock bootloader the
+        // configuration it reads: the unit's may have been cut short
+        let mut stock_area = None;
         let (boot, title): (Vec<u8>, String) = if let Some(raw) = package {
             let pkg = Package::parse(raw).map_err(|e| Error::Refused(e.0))?;
             if !board.models.contains(&pkg.model()) {
                 return refuse(format!("this package is for the {}, the connected unit is a {}", pkg.model(), board.name));
             }
             let b = stored_bootloader(&pkg.flash).ok_or_else(|| Error::Refused("the package has no readable bootloader".into()))?;
+            stock_area = Some(pkg.flash[..BOOT_AREA].to_vec());
             (b, format!("Put back the stock bootloader (from {})", pkg.identity))
         } else if let Some(b) = boot {
             bankcb_check(b).map_err(|e| Error::Refused(e.0))?;
@@ -403,8 +407,17 @@ impl<F: Flash> Session<F> {
             let (b, v) = bundled_bootloader(board)?;
             (b.to_vec(), format!("Install m-bootloader {v} for the {}", board.name))
         };
-        let area = build_boot_area(&self.flash, &boot)
-            .map_err(|e| Error::Refused(format!("{}; install firmware with its bootloader instead", e.0)))?;
+        let full = reads_config(&boot);
+        let (area, note) = match stock_area {
+            Some(area) => (area, "Only the boot area (0x00000-0x03FFF) is written, all of it from the package."),
+            None if full => (build_boot_area(&self.flash, &boot)
+                .map_err(|e| Error::Refused(format!("{}; install firmware with its bootloader instead", e.0)))?,
+                "Only the boot area (0x00000-0x03FFF) is written; the unit's own configuration in it is kept."),
+            None => (build_short_boot_area(&self.flash, &boot)
+                .map_err(|e| Error::Refused(format!("{}; install firmware with its bootloader instead", e.0)))?,
+                "Only the boot area (0x00000-0x03FFF) is written. Of the unit's configuration, which this bootloader does \
+                 not read, only the chip key that firmware installers need is kept."),
+        };
         let mut target = area;
         target.extend_from_slice(&self.flash[BOOT_AREA..]);
         // the stock bootloader is what the unit came with
@@ -415,17 +428,26 @@ impl<F: Flash> Session<F> {
                                    newer chip 0xB36014 did not start after installing it, and why is not known yet: install it at \
                                    your own risk."));
         }
-        // m-bootloader before 1.3 takes only 360 MHz, and FM-1 016's configuration says 320
-        if let Some((_, v)) = bootloader_identity(&boot).filter(|_| package.is_none()) {
-            let old = !v.starts_with(|c: char| c.is_ascii_digit()) || ["1.0", "1.1", "1.2"].iter().any(|o| v.starts_with(o));
-            if old && config_sys_clk(&self.flash).is_some_and(|hz| hz != 360_000_000) {
-                warnings.push(format!("This bootloader ({v}) rejects this unit's boot configuration: it would stop at its menu \
-                                       with BAD CONFIG on every start. Install m-bootloader 1.3 or newer instead."));
+        if package.is_none() && full {
+            let hz = config_sys_clk(&self.flash);
+            match bootloader_identity(&boot) {
+                Some((_, v)) => {
+                    // before 1.3 only 360 MHz is taken, and FM-1 016's configuration says
+                    // 320; before 1.4 a configuration cut short is not taken either
+                    let before_1_3 = !v.starts_with(|c: char| c.is_ascii_digit())
+                        || ["1.0", "1.1", "1.2"].iter().any(|o| v.starts_with(o));
+                    if hz.is_none_or(|hz| before_1_3 && hz != 360_000_000) {
+                        warnings.push(format!("This bootloader ({v}) rejects this unit's boot configuration: it would stop at \
+                                               its menu with BAD CONFIG on every start. Install m-bootloader 1.4 or newer instead."));
+                    }
+                }
+                None if hz.is_none() => warnings.push(
+                    "This unit's boot configuration has been cut short, and this bootloader may need all of it: the unit may \
+                     not start. To put back the stock bootloader, use its official package instead.".into()),
+                None => {}
             }
         }
-        Plan::new(title, &self.flash, target, vec![(0, BOOT_AREA)],
-                  vec!["Only the boot area (0x00000-0x03FFF) is written; the unit's own configuration in it is kept.".into()],
-                  warnings)
+        Plan::new(title, &self.flash, target, vec![(0, BOOT_AREA)], vec![note.into()], warnings)
     }
 
     pub fn apply(&mut self, plan: &Plan, event: &mut dyn FnMut(Event), log: &mut dyn FnMut(String)) -> Result<(), Error> {

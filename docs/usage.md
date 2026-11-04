@@ -79,8 +79,8 @@ stock firmware takes about half a minute).
 | **Back up the whole flash** | nothing: saves the 1 MiB flash image and a `.json` describing it |
 | **Restore a backup** | the parts that differ; a backup of another unit keeps this unit's own factory data (calibration, Bluetooth address) |
 | **Install firmware (.fwsc)** | the firmware from an M-VAVE package (or a custom one in the same format); optionally the package's stock bootloader, and optionally erasing the settings and Bluetooth pairings |
-| **Install m-bootloader** | the boot area only (16 KiB), the build for the identified model |
-| **Put back the stock bootloader** | the boot area only, from an official package |
+| **Install m-bootloader** | the boot area only (16 KiB), the build for the identified model; of the unit's boot configuration, which it does not read, only the chip key that firmware installers need is kept |
+| **Put back the stock bootloader** | the boot area only, all of it from an official package, the full configuration included |
 
 Use the official `.fwsc` files from M-VAVE's website as they are: no
 conversion is needed. FM-1 **016** is supported, including its DX7 data file

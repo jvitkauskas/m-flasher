@@ -15,6 +15,8 @@ backup can repair.
   decrypt with this unit's chip key.
 - Installing m-bootloader on a flash chip it has not been tested with brings a
   warning.
+- Installing m-bootloader is refused if the unit's chip key is damaged: it is
+  the one part of the boot configuration kept, and firmware installers need it.
 - A full backup is saved before the first write of a session.
 
 **While writing**

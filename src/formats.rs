@@ -262,6 +262,72 @@ pub fn config_sys_clk(flash: &[u8]) -> Option<u32> {
     (at + 4 <= c.len()).then(|| u32le(c, at))
 }
 
+/// Where m-bootloader 1.4 and newer leave the configuration's chip-key record,
+/// the only part anything still reads, and how long it is.
+pub const CONFIG_AT: usize = 0x3FDC;
+pub const CONFIG_KEEP: usize = 34;
+
+/// Whether this bootloader reads the unit's configuration: anything but
+/// m-bootloader 1.4 or newer.
+pub fn reads_config(boot: &[u8]) -> bool {
+    let Some((_, version)) = bootloader_identity(boot) else { return true };
+    let number = version.split('-').next().unwrap_or("");
+    let Some((major, minor)) = number.split_once('.') else { return true };
+    match (major.parse::<u32>(), minor.parse::<u32>()) {
+        (Ok(major), Ok(minor)) => (major, minor) < (1, 4),
+        _ => true,
+    }
+}
+
+/// flash's boot area for a bootloader that does not read the configuration: the
+/// bootloader, then erased flash up to the configuration's chip-key record at
+/// CONFIG_AT. Keeps the flash header and the file table. Refuses if the record
+/// is damaged, as it is the only part kept and firmware installers need it.
+pub fn build_short_boot_area(flash: &[u8], boot: &[u8]) -> Result<Vec<u8>, FormatError> {
+    bankcb_check(boot)?;
+    if flash.len() < BOOT_AREA {
+        return err("the boot area is incomplete");
+    }
+    if boot.len() > CONFIG_AT - BOOT_AT {
+        return err(format!("bootloader too large: {} bytes, room for {}", boot.len(), CONFIG_AT - BOOT_AT));
+    }
+    let t = boot_table(flash);
+    if t.len() < 3 || t[0].name != "uboot.boot" || t[0].addr as usize != BOOT_AT {
+        return err("the boot area has no valid file table");
+    }
+    let (isd_at, isd_len) = (t[1].addr as usize, t[1].len as usize);
+    if t[1].name != "isd_config.ini" || isd_at < 0x38D0 || isd_at > BOOT_AREA || isd_len < CONFIG_KEEP
+        || isd_len > BOOT_AREA - isd_at {
+        return err("isd_config is not safely contained in the boot area");
+    }
+    if t[2..].iter().any(|e| (e.addr as usize) < BOOT_AREA) {
+        return err("other data in the boot area would be overwritten");
+    }
+    let blob = &flash[isd_at..isd_at + CONFIG_KEEP];
+    if crc16(&blob[..32]) != u16le(blob, 32) {
+        return err("the unit's chip-key record is damaged");
+    }
+    let mut area = vec![0xFF; BOOT_AREA];
+    area[..BOOT_AT].copy_from_slice(&flash[..BOOT_AT]);
+    let mut e = t[0].raw;
+    put16(&mut e, 2, crc16(boot));
+    put32(&mut e, 8, boot.len() as u32);
+    let hc = crc16(&e[2..]);
+    put16(&mut e, 0, hc);
+    area[0x20..0x40].copy_from_slice(&enc(&e, 0xFFFF));
+    let mut e = t[1].raw;
+    put16(&mut e, 2, crc16(blob));
+    put32(&mut e, 4, CONFIG_AT as u32);
+    put32(&mut e, 8, CONFIG_KEEP as u32);
+    let hc = crc16(&e[2..]);
+    put16(&mut e, 0, hc);
+    area[0x40..0x60].copy_from_slice(&enc(&e, 0xFFFF));
+    area[BOOT_AT..BOOT_AT + 16].copy_from_slice(&enc(&boot[..16], 0xFFFF));
+    area[BOOT_AT + 16..BOOT_AT + boot.len()].copy_from_slice(&enc(&boot[16..], 0xFFFF));
+    area[CONFIG_AT..CONFIG_AT + CONFIG_KEEP].copy_from_slice(blob);
+    Ok(area)
+}
+
 /// The uboot.boot container stored in a boot area.
 pub fn stored_bootloader(flash: &[u8]) -> Option<Vec<u8>> {
     let t = boot_table(flash);
@@ -500,6 +566,59 @@ mod tests {
         assert_eq!(&replaced[..0x20], &flash[..0x20]);
         assert_eq!(&replaced[0x60..BOOT_AT], &flash[0x60..BOOT_AT]);
         assert_eq!(&replaced[0x3938 + config.len as usize..], &flash[0x3938 + config.len as usize..]);
+    }
+
+    /// boot_image, with the configuration starting with a good chip-key record.
+    fn keyed_image(boot: &[u8], isd_at: usize) -> Vec<u8> {
+        let mut flash = boot_image(boot, isd_at);
+        let crc = crc16(&flash[isd_at..isd_at + 32]);
+        put16(&mut flash, isd_at + 32, crc);
+        let config = flash[isd_at..isd_at + 0x2BB].to_vec();
+        flash[0x40..0x60].copy_from_slice(&boot_entry("isd_config.ini", isd_at, config.len(), crc16(&config)));
+        flash
+    }
+
+    #[test]
+    fn short_boot_area_keeps_only_the_chip_key_record() {
+        for isd_at in [0x38D0, 0x3938] {
+            let flash = keyed_image(&boot_container(0x3830), isd_at);
+            let blob = flash[isd_at..isd_at + CONFIG_KEEP].to_vec();
+            for size in [0x3300, CONFIG_AT - BOOT_AT] {
+                let boot = boot_container(size);
+                let area = build_short_boot_area(&flash, &boot).unwrap();
+                assert_eq!(area.len(), BOOT_AREA);
+                assert_eq!(stored_bootloader(&area).unwrap(), boot);
+                assert_eq!(&area[..0x20], &flash[..0x20]);
+                assert_eq!(&area[0x60..BOOT_AT], &flash[0x60..BOOT_AT]);
+                assert_eq!(&area[CONFIG_AT..CONFIG_AT + CONFIG_KEEP], &blob[..]);
+                assert!(area[BOOT_AT + size..CONFIG_AT].iter().all(|&b| b == 0xFF));
+                assert_eq!(&area[CONFIG_AT + CONFIG_KEEP..], &[0xFF, 0xFF]);
+                let t = boot_table(&area);
+                assert_eq!((t[1].addr as usize, t[1].len as usize), (CONFIG_AT, CONFIG_KEEP));
+                assert_eq!(t[1].data_crc, crc16(&blob));
+                // and again, over its own result
+                let mut again = flash.clone();
+                again[..BOOT_AREA].copy_from_slice(&area);
+                assert_eq!(build_short_boot_area(&again, &boot).unwrap(), area);
+            }
+        }
+    }
+
+    #[test]
+    fn short_boot_area_refuses_what_it_cannot_keep() {
+        let flash = keyed_image(&boot_container(0x3830), 0x38D0);
+        assert!(build_short_boot_area(&flash, &boot_container(CONFIG_AT - BOOT_AT + 1)).is_err());
+        let mut damaged = flash.clone();
+        damaged[0x38D0] ^= 1;
+        assert!(build_short_boot_area(&damaged, &boot_container(0x3300)).is_err(), "the chip key would be lost");
+        for (at, len) in [(0x38D0, 33), (0x2000, 0x2BB), (0x3FE0, 34)] {
+            let mut bad = flash.clone();
+            bad[0x40..0x60].copy_from_slice(&boot_entry("isd_config.ini", at, len, 0));
+            assert!(build_short_boot_area(&bad, &boot_container(0x3300)).is_err(), "config at 0x{at:X}");
+        }
+        let mut other = flash.clone();
+        other[0x60..0x80].copy_from_slice(&boot_entry("something", 0x3000, 16, 0));
+        assert!(build_short_boot_area(&other, &boot_container(0x3300)).is_err(), "it would be overwritten");
     }
 
     #[test]

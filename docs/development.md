@@ -105,6 +105,14 @@ directions, and installing stock firmware and restoring, ending byte-identical.
 On an FM-1, the build just before it boots with both the 015 and 016 boot
 configurations. Not yet tried on Windows or macOS, or with M-UPGRADE.
 
+m-bootloader 1.4 does not read the boot configuration, so installing it keeps
+only the 34-byte chip-key record, at `0x3FDC`, and it may use the room up to
+there. The ROM loads a full-size image on an FM-1 and an SMK-37, and SLOOP 2.8.5
+installs from its browser installer on this layout. The stock bootloader reads
+the keys, so it goes back with its package's whole boot area. Older M-Flasher
+versions keep the unit's configuration when putting it back, so do not use them
+for that on such a unit.
+
 On an SMK-37 Pro, from Linux, Windows and macOS (an M3 Mac): identifying
 stock firmware, Baud Girl and Snoop37; backups (identical to jl-uboot-tool's
 reads); installing m-bootloader; installing stock firmware over Baud
