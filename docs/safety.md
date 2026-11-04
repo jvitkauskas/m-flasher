@@ -41,4 +41,6 @@ backup can repair.
   that what is left behind can confuse the new firmware. Restoring a backup
   made while a firmware was installed is the clean way back to it.
 - The synth sounds (USR), which official updates never write, come back only
-  from a backup.
+  from a backup. FM-1 016 overwrites them once it runs, so going from 016 back to
+  015 leaves garbage preset names and wrong pitch, whichever bootloader is
+  installed, until a backup with the original area is restored.

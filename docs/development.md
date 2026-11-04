@@ -107,11 +107,17 @@ configurations. Not yet tried on Windows or macOS, or with M-UPGRADE.
 
 m-bootloader 1.4 does not read the boot configuration, so installing it keeps
 only the 34-byte chip-key record, at `0x3FDC`, and it may use the room up to
-there. The ROM loads a full-size image on an FM-1 and an SMK-37, and SLOOP 2.8.5
-installs from its browser installer on this layout. The stock bootloader reads
-the keys, so it goes back with its package's whole boot area. Older M-Flasher
-versions keep the unit's configuration when putting it back, so do not use them
-for that on such a unit.
+there. The ROM loads a full-size image on an FM-1 and an SMK-37. Build
+`1.4-ac26c70`, on the same two units: installing with M-Flasher and M-UPGRADE gives
+the same boot area from every starting configuration, stock firmware runs, and
+putting stock back and Baud Girl's installer both restore the full configuration.
+On the FM-1, official 015 and 016 updates restore it too, and SLOOP, Felucca,
+ChoralRoot and Melodee install without touching the boot area. The SMK-37's own
+official update has not been run from it: its firmware 900 refuses at `FAILED -5`,
+and from stock 016 M-UPGRADE needs force upgrade. The stock bootloader reads the
+keys, so it goes back with its package's whole boot area. Older M-Flasher versions
+keep the unit's configuration when putting it back, so do not use them for that
+on such a unit.
 
 On an SMK-37 Pro, from Linux, Windows and macOS (an M3 Mac): identifying
 stock firmware, Baud Girl and Snoop37; backups (identical to jl-uboot-tool's

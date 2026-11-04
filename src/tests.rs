@@ -374,7 +374,9 @@ fn with_version(boot: &[u8], version: &str) -> Vec<u8> {
 #[test]
 fn an_older_bootloader_warns_on_fm1_016s_configuration() {
     let (boot, version) = bundled_bootloader(&FM1).unwrap();
-    assert!(version.starts_with("1.4"), "the bundled build reads no configuration: {version}");
+    assert!(!crate::formats::reads_config(boot), "the bundled build reads no configuration: {version}");
+    assert!(!crate::formats::reads_config(&with_version(boot, "2.0-abc1234")), "newer majors read none either");
+    assert!(crate::formats::reads_config(&with_version(boot, "1.3-6c321e9")));
     let flash_with = |hz: u32| {
         let mut flash = with_boot_area(fm1_016_image(), boot);
         flash[0x3938 + 40..0x3938 + 48].copy_from_slice(b"SYS_CLK\0");
@@ -393,6 +395,7 @@ fn an_older_bootloader_warns_on_fm1_016s_configuration() {
     assert!(!warned(360_000_000, Some(&old)), "015's configuration is fine");
     assert!(!warned(320_000_000, Some(&with_version(boot, "1.3-6c321e9"))), "1.3 takes 320 MHz");
     assert!(!warned(320_000_000, Some(&with_version(boot, "1.4-ac26c70"))));
+    assert!(!warned(320_000_000, Some(&with_version(boot, "2.0-abc1234"))));
     assert!(!warned(320_000_000, Some(boot)));
     assert!(!warned(320_000_000, None), "the bundled build");
 }
