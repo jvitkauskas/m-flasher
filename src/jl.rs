@@ -21,6 +21,9 @@ const UNIQUE_ID: u16 = 0xFC42;
 const DISPLAY_ON: u16 = 0xFC43;
 const DISPLAY_TEXT: u16 = 0xFC44;
 const DISPLAY_BAR: u16 = 0xFC45;
+const LAST_ERROR: u16 = 0xFC46;
+/// FC46's code for an address outside the flash.
+const OUT_OF_RANGE: u8 = 3;
 const LOADER_ARG: u16 = 1; // target: SPI NOR flash
 
 const WRITE_MEMORY: u16 = 0xFB06;
@@ -191,19 +194,20 @@ impl<S: Scsi> Connection<S> {
             log(format!("M-Flasher loader {v} already running"));
             c.own = v.clone();
         } else {
-            // ours, at the address the running one (if any) does not use
-            let (addr, image) = match &ours_running {
-                None => OWN_A,
-                Some((_, at)) if *at == OWN_B.0 => OWN_A,
-                Some(_) => OWN_B,           // at A, or an older build that does not say where
-            };
-            log(format!("Starting the M-Flasher loader {bundled}"));
-            let scrambled: Vec<Vec<u8>> = image.chunks(512).map(|b| crc_cipher(b, 0xFFFF_FFFF)).collect();
-            c.upload_and_jump(addr, &scrambled)?;
-            match c.identify() {
-                Some((v, _)) => c.own = v,
-                None => return Err(ScsiError::Failed(
-                    "the M-Flasher loader did not start: switch the unit off and on in download mode, then connect again".into())),
+            c.start_own(ours_running.map(|(_, at)| at), &bundled, log)?;
+        }
+        // A loader that found no flash stays that way, and one that is already
+        // running would be used again: only starting it again can help.
+        if !c.loader_has_flash() {
+            log("The loader found no flash chip when it started: starting it again".into());
+            let running = c.identify().map(|(_, at)| at);
+            c.start_own(running, &bundled, log)?;
+            if !c.loader_has_flash() {
+                let id = c.call(ONLINE_DEVICE, &[]).map(|r| u32::from_le_bytes([r[2], r[3], r[4], r[5]])).unwrap_or(0);
+                return Err(ScsiError::Failed(format!(
+                    "the flash chip did not identify itself to the loader (its ID now reads 0x{id:06X}), so the flash \
+                     cannot be read. Nothing was written. Unplug the unit, switch it off and on, and connect again \
+                     in download mode; if this stays, report the ID")));
             }
         }
         c.read_io = 16384;
@@ -231,6 +235,40 @@ impl<S: Scsi> Connection<S> {
             (String::from_utf8_lossy(&r[4..7]).trim_end_matches('\0').to_string(),
              u32::from_be_bytes([r[8], r[9], r[10], r[11]]))
         })
+    }
+
+    /// Uploads and starts our loader, at the address the running one (if any)
+    /// does not use.
+    fn start_own(&mut self, running: Option<u32>, bundled: &str, log: &mut dyn FnMut(String)) -> Result<(), ScsiError> {
+        let (addr, image) = match running {
+            None => OWN_A,
+            Some(at) if at == OWN_B.0 => OWN_A,
+            Some(_) => OWN_B,           // at A, or an older build that does not say where
+        };
+        log(format!("Starting the M-Flasher loader {bundled}"));
+        let scrambled: Vec<Vec<u8>> = image.chunks(512).map(|b| crc_cipher(b, 0xFFFF_FFFF)).collect();
+        self.upload_and_jump(addr, &scrambled)?;
+        match self.identify() {
+            Some((v, _)) => {
+                self.own = v;
+                Ok(())
+            }
+            None => Err(ScsiError::Failed(
+                "the M-Flasher loader did not start: switch the unit off and on in download mode, then connect again".into())),
+        }
+    }
+
+    /// Whether the loader found the flash when it started: it takes the size
+    /// from the flash's ID once, then, without one, refuses every read as out
+    /// of range, sending 16 bytes. Only a definite no counts: other failures
+    /// are for the real read to report.
+    fn loader_has_flash(&mut self) -> bool {
+        let _ = self.call(LAST_ERROR, &[]);
+        let mut args = 0u32.to_be_bytes().to_vec();
+        args.extend(32u16.to_be_bytes());
+        let mut probe = [0u8; 32];
+        let _ = self.dev.execute(&cdb(READ_FLASH, &args), Data::In(&mut probe));
+        !matches!(self.call(LAST_ERROR, &[]), Ok(r) if r[0] == OUT_OF_RANGE)
     }
 
     /// The version of the loader bundled in this build.

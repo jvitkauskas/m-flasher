@@ -5,7 +5,7 @@
 //! skipped without it.
 
 use crate::boards::{Analysis, CHIP_KEY, FLASH_SIZE, FM1, SMK37};
-use crate::formats::{AppStatus, BOOT_AREA, Package, app_files_status, app_table, boot_table, bootloader_identity,
+use crate::formats::{AppStatus, BOOT_AREA, BOOT_AT, Package, app_files_status, app_table, boot_table, bootloader_identity,
                      build_boot_area, crc16, enc, stored_bootloader};
 use crate::jl::Flash;
 use crate::ops::{Error, Plan, Session, bundled_bootloader};
@@ -300,6 +300,65 @@ fn minifm_016_vendor_package() {
     let p = s.plan_firmware(&raw, false, false).unwrap();
     apply(&mut s, &p).unwrap();
     assert_eq!(s.dev.mem, padded, "back to the MiniFM firmware, byte for byte");
+}
+
+/// A flash whose boot area holds `boot`.
+fn with_boot_area(mut flash: Vec<u8>, boot: &[u8]) -> Vec<u8> {
+    let mut head = [0u8; 32];
+    let crc = crc16(&head[2..]);
+    head[..2].copy_from_slice(&crc.to_le_bytes());
+    flash[..32].copy_from_slice(&enc(&head, 0xFFFF));
+    let table: [(&str, u32, u32); 3] = [("uboot.boot", BOOT_AT as u32, 16), ("isd_config.ini", 0x3938, 16), ("app_dir_head", 0x4000, 0)];
+    for (i, (name, addr, len)) in table.iter().enumerate() {
+        let mut e = [0u8; 32];
+        e[4..8].copy_from_slice(&addr.to_le_bytes());
+        e[8..12].copy_from_slice(&len.to_le_bytes());
+        e[16..16 + name.len()].copy_from_slice(name.as_bytes());
+        let crc = crc16(&e[2..]);
+        e[..2].copy_from_slice(&crc.to_le_bytes());
+        flash[0x20 + i * 32..0x40 + i * 32].copy_from_slice(&enc(&e, 0xFFFF));
+    }
+    let area = build_boot_area(&flash, boot).unwrap();
+    flash[..BOOT_AREA].copy_from_slice(&area);
+    flash
+}
+
+#[test]
+fn the_newer_fm1_flash_chip_identifies_the_model() {
+    let a = Analysis::new(&fm1_016_image(), Some(0xB36014), CHIP_KEY);
+    assert_eq!(a.board, Some(&FM1));
+    assert!(a.certain, "the layout and the chip agree");
+    assert!(!Analysis::new(&fm1_016_image(), Some(0xEF4014), CHIP_KEY).certain);
+}
+
+#[test]
+fn installing_m_bootloader_warns_about_an_untested_flash_chip() {
+    let (boot, _) = bundled_bootloader(&FM1).unwrap();
+    let flash = with_boot_area(fm1_016_image(), boot);
+    let with_chip = |id: u32, name: &str| {
+        let mut f = own(flash.clone(), name);
+        f.id = id;
+        session_with(f)
+    };
+    let untested = with_chip(0xB36014, "untested-chip");
+    let p = untested.plan_bootloader(None, None).unwrap();
+    assert!(p.warnings.iter().any(|w| w.contains("0xB36014")), "{:?}", p.warnings);
+    let p = untested.plan_bootloader(Some(boot), None).unwrap();
+    assert!(p.warnings.iter().any(|w| w.contains("0xB36014")), "a given file is no safer: {:?}", p.warnings);
+    // the stock bootloader is what the unit came with
+    let pkg = package("FM-1_016", &flash[..0xA9000]);
+    assert!(untested.plan_bootloader(None, Some(&pkg)).unwrap().warnings.is_empty());
+    for id in [FM1.flash_id, SMK37.flash_id] {
+        assert!(with_chip(id, "tested-chip").plan_bootloader(None, None).unwrap().warnings.is_empty());
+    }
+}
+
+#[test]
+fn the_flash_chip_is_logged_before_the_read() {
+    let mut log = vec![];
+    Session::open(FakeFlash::new(fm1_016_image()), std::env::temp_dir(), &mut |m| log.push(m), &mut |_, _| {}).ok().unwrap();
+    let chip = log.iter().position(|l| l == "Flash chip 0xEB6014").expect("logged");
+    assert!(chip < log.iter().position(|l| l == "Reading the flash").unwrap(), "{log:?}");
 }
 
 #[test]
@@ -616,6 +675,24 @@ pub struct MockRom {
     pub fail_reads: usize,
     /// Send one byte less than asked for in FD61.
     pub short_reads: bool,
+    /// Behave as the ROM and our loader do: without a loader the loader's
+    /// commands are not answered, and a jump starts one.
+    pub real_loader: bool,
+    /// This many loader starts find no flash.
+    pub no_flash_starts: usize,
+    /// The running loader found no flash: FD05 is refused as out of range.
+    pub no_flash: bool,
+    /// What FC46 answers, then clears.
+    pub last_error: u8,
+    /// What the flash chip answers now (FC0A).
+    pub flash_id: u32,
+}
+
+/// The version in the bundled loader.
+fn bundled_version() -> &'static str {
+    let img: &'static [u8] = include_bytes!("../data/mflr-loader-a.bin");
+    let at = img.windows(4).position(|w| w == b"MFLR").unwrap();
+    std::str::from_utf8(&img[at + 4..at + 7]).unwrap()
 }
 
 impl Scsi for MockRom {
@@ -649,6 +726,33 @@ impl Scsi for MockRom {
                     return Ok(b.len() - self.short_reads as usize);
                 }
                 b.fill(0);
+                if self.real_loader {
+                    if self.loader.is_none() && op != 0xFB08 {
+                        return Ok(b.len()); // no echo: the ROM does not know the command
+                    }
+                    match op {
+                        0xFB08 => {
+                            let at = u32::from_be_bytes(cdb[2..6].try_into().unwrap());
+                            self.loader = Some((bundled_version(), at));
+                            self.no_flash = self.no_flash_starts > 0;
+                            self.no_flash_starts = self.no_flash_starts.saturating_sub(1);
+                        }
+                        0xFD05 if self.no_flash => {
+                            self.last_error = 3;
+                            return Ok(16);
+                        }
+                        0xFD05 => return Ok(b.len()),
+                        0xFC0A => {
+                            b[2] = 3;
+                            b[4..8].copy_from_slice(&self.flash_id.to_le_bytes());
+                        }
+                        0xFC46 => {
+                            b[2] = self.last_error;
+                            self.last_error = 0;
+                        }
+                        _ => {}
+                    }
+                }
                 b[..2].copy_from_slice(&cdb[..2]);
                 if let (0xFC40, Some((v, at))) = (op, self.loader) {
                     b[2..6].copy_from_slice(b"MFLR");
@@ -659,6 +763,60 @@ impl Scsi for MockRom {
             }
         }
     }
+}
+
+/// `Connection::start` on a mock unit: the log and the connection, or the error.
+fn start(rom: MockRom) -> (Vec<String>, Result<Connection<MockRom>, ScsiError>) {
+    let mut log = vec![];
+    let flash_id = if rom.flash_id == 0 { 0xB36014 } else { rom.flash_id };
+    let c = Connection::start("/dev/fake", MockRom { real_loader: true, flash_id, ..rom }, &mut |m| log.push(m));
+    (log, c)
+}
+
+fn jumps(c: &Connection<MockRom>) -> Vec<u32> {
+    c.device().log.iter().filter(|(cdb, _)| cdb[..2] == [0xFB, 0x08])
+        .map(|(cdb, _)| u32::from_be_bytes(cdb[2..6].try_into().unwrap())).collect()
+}
+
+const SLOT_A: u32 = 0x01C2_0000;
+const SLOT_B: u32 = 0x01C2_8000;
+
+#[test]
+fn a_loader_that_has_the_flash_is_kept() {
+    let (log, c) = start(MockRom::default());
+    let c = c.ok().unwrap();
+    assert_eq!(jumps(&c), vec![SLOT_A], "started once: {log:?}");
+    assert_eq!(c.flash_id(), 0xB36014);
+
+    let (log, c) = start(MockRom { loader: Some((bundled_version(), SLOT_B)), ..Default::default() });
+    assert!(jumps(&c.ok().unwrap()).is_empty(), "reused: {log:?}");
+    assert!(log[0].contains("already running"), "{log:?}");
+}
+
+#[test]
+fn a_running_loader_without_flash_is_started_again_in_the_other_slot() {
+    for (at, other) in [(SLOT_A, SLOT_B), (SLOT_B, SLOT_A)] {
+        let (log, c) = start(MockRom { loader: Some((bundled_version(), at)), no_flash: true, ..Default::default() });
+        let mut c = c.ok().unwrap();
+        assert_eq!(jumps(&c), vec![other], "{log:?}");
+        assert!(log.iter().any(|l| l.contains("found no flash chip")), "{log:?}");
+        assert_eq!(c.flash_id(), 0xB36014);
+        assert_eq!(c.read(0, 32, &mut |_| {}).unwrap().len(), 32);
+    }
+}
+
+#[test]
+fn a_new_loader_without_flash_is_started_once_more() {
+    let (log, c) = start(MockRom { no_flash_starts: 1, ..Default::default() });
+    assert_eq!(jumps(&c.ok().unwrap()), vec![SLOT_A, SLOT_B], "{log:?}");
+}
+
+#[test]
+fn a_flash_that_never_answers_is_a_clear_error() {
+    let (log, c) = start(MockRom { no_flash_starts: 9, flash_id: 0xFFFFFF, ..Default::default() });
+    let Err(ScsiError::Failed(e)) = c else { panic!("expected an error: {log:?}") };
+    assert!(e.contains("0xFFFFFF") && e.contains("Nothing was written"), "{e}");
+    assert_eq!(log.iter().filter(|l| l.starts_with("Starting")).count(), 2, "not tried for ever: {log:?}");
 }
 
 fn ram_unit(rom: MockRom) -> Connection<MockRom> {

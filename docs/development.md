@@ -9,6 +9,11 @@ also specifies its commands. If another tool's loader is already running,
 M-Flasher asks for the unit to be switched off and on. The protocol follows
 [jl-uboot-tool](https://github.com/kagaimiq/jl-uboot-tool) by kagaimiq.
 
+The loader takes the flash's size from its ID once, when it starts, and without
+one refuses every read. M-Flasher reuses a loader that is already running, so
+it checks for that with a small read, and starts a new one in the other slot
+once before giving up with the ID the chip now gives.
+
 How the unit is reached differs by system:
 
 - **Windows:** SCSI pass-through to the disk (`SCSI_PASS_THROUGH_DIRECT`),
@@ -88,6 +93,11 @@ and `macos/render.sh` renders the icons and the disk image's background from
 their SVGs.
 
 ## Tested
+
+FM-1s sold from late 2026 have a UCUN UC25HQ80 flash (`0xB36014`) in place of the
+Puya P25Q80H (`0x856014`). Owners report backups and restores with M-Flasher on
+it, but m-bootloader has not been tested on it, and one unit did not start after
+installing it ([#13](https://github.com/jvitkauskas/m-flasher/issues/13)).
 
 On an SMK-37 Pro, from Linux, Windows and macOS (an M3 Mac): identifying
 stock firmware, Baud Girl and Snoop37; backups (identical to jl-uboot-tool's

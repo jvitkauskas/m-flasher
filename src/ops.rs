@@ -7,7 +7,7 @@
 //! compared (and rewritten once on a mismatch), and the image is saved as a
 //! backup before the first write of a session.
 
-use crate::boards::{Analysis, BOARDS, Board, CHIP_KEY, FLASH_SIZE};
+use crate::boards::{Analysis, BOARDS, Board, CHIP_KEY, FLASH_SIZE, flash_tested};
 use crate::formats::{
     AppStatus, BOOT_AREA, Package, SECTOR, app_files_status, crc32, app_table, bankcb_check, bootloader_identity,
     build_boot_area, stored_bootloader,
@@ -155,6 +155,7 @@ impl<F: Flash> Session<F> {
         if dev.chip_key() != CHIP_KEY {
             log(format!("Note: chip key 0x{:04X} (0x{CHIP_KEY:04X} expected)", dev.chip_key()));
         }
+        log(format!("Flash chip 0x{:06X}", dev.flash_id()));
         log("Reading the flash".into());
         let started = std::time::Instant::now();
         let a = dev.read(0, FLASH_SIZE, &mut |d| progress(d, FLASH_SIZE))?;
@@ -406,9 +407,18 @@ impl<F: Flash> Session<F> {
             .map_err(|e| Error::Refused(format!("{}; install firmware with its bootloader instead", e.0)))?;
         let mut target = area;
         target.extend_from_slice(&self.flash[BOOT_AREA..]);
+        // the stock bootloader is what the unit came with
+        let id = self.dev.flash_id();
+        let warnings = if package.is_none() && !flash_tested(id) {
+            vec![format!("This unit's flash chip (0x{id:06X}) has not been tested with m-bootloader. An FM-1 with the \
+                          newer chip 0xB36014 did not start after installing it, and why is not known yet: install it at \
+                          your own risk.")]
+        } else {
+            vec![]
+        };
         Plan::new(title, &self.flash, target, vec![(0, BOOT_AREA)],
                   vec!["Only the boot area (0x00000-0x03FFF) is written; the unit's own configuration in it is kept.".into()],
-                  vec![])
+                  warnings)
     }
 
     pub fn apply(&mut self, plan: &Plan, event: &mut dyn FnMut(Event), log: &mut dyn FnMut(String)) -> Result<(), Error> {
