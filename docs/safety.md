@@ -13,6 +13,8 @@ backup can repair.
   other model is refused.
 - A firmware package must be for the connected model, and its firmware must
   decrypt with this unit's chip key.
+- Installing m-bootloader on a flash chip it has not been tested with brings a
+  warning.
 - A full backup is saved before the first write of a session.
 
 **While writing**

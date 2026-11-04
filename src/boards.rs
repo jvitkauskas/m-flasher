@@ -17,8 +17,10 @@ pub struct Board {
     pub tag: &'static str,
     /// Package models (identity without version).
     pub models: &'static [&'static str],
-    /// JEDEC ID seen on units (a hint only).
+    /// JEDEC ID seen on units (a hint only), and the chip m-bootloader has run on.
     pub flash_id: u32,
+    /// Other JEDEC IDs seen on units (a hint too); m-bootloader has not run on them.
+    pub other_flash: &'static [u32],
     /// Per-unit data, never written from another unit's image.
     pub factory: &'static [(usize, usize)],
 }
@@ -31,6 +33,7 @@ pub static FM1: Board = Board {
     // chip key, layout and boot area, so each can install the other's
     models: &["FM-1", "MiniFM"],
     flash_id: 0x856014,
+    other_flash: &[0xB36014], // UCUN UC25HQ80, in units sold from late 2026
     factory: &[KEY_MAC],
 };
 pub static SMK37: Board = Board {
@@ -39,9 +42,15 @@ pub static SMK37: Board = Board {
     tag: "smk37",
     models: &["SMK-37 Pro", "SMK-37 Elite"],
     flash_id: 0xEB6014,
+    other_flash: &[],
     factory: &[(0xC1000, 0xC2000), KEY_MAC], // USRTRIM: factory key and pad calibration
 };
 pub static BOARDS: [&Board; 2] = [&FM1, &SMK37];
+
+/// Whether m-bootloader has been run on this flash chip.
+pub fn flash_tested(id: u32) -> bool {
+    BOARDS.iter().any(|b| b.flash_id == id)
+}
 
 const SMK_TRIM_MARKER: (usize, &[u8]) = (0xC1224, b"trimdat\0");
 const GUARD_COPY: (usize, &[u8]) = (0xFF000, b"TRIMCOPY"); // our bootloader's copy of the calibration
@@ -114,7 +123,7 @@ impl Analysis {
         }
         if let Some(id) = flash_id {
             for b in BOARDS {
-                if id == b.flash_id {
+                if id == b.flash_id || b.other_flash.contains(&id) {
                     ev.push((b, false, format!("flash chip 0x{id:06X}")));
                 }
             }
