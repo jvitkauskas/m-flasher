@@ -1,7 +1,8 @@
 //! Tests against a simulated unit with NOR flash behaviour. The tests with real
 //! flash images and M-VAVE packages need FLASHER_TEST_DATA (a folder with
 //! smk37-stock.bin, smk37-snoop37.bin, smk37-baudgirl.bin, fm1-stock.bin,
-//! smk37-016.fwsc, fm1-015.fwsc, fm1-016.fwsc); they are skipped without it.
+//! smk37-016.fwsc, fm1-015.fwsc, fm1-016.fwsc, minifm-016.fwsc); they are
+//! skipped without it.
 
 use crate::boards::{Analysis, CHIP_KEY, FLASH_SIZE, FM1, SMK37};
 use crate::formats::{AppStatus, BOOT_AREA, Package, app_files_status, app_table, boot_table, bootloader_identity,
@@ -135,10 +136,15 @@ fn bundled_bootloaders() {
 /// The FM-1 016 directory, with small synthetic files, so its layout and all
 /// three file CRCs are exercised even without the vendor's package.
 fn fm1_016_image() -> Vec<u8> {
+    image_016(b"FM-1_016\0")
+}
+
+/// The same directory, with the firmware calling itself `identity`.
+fn image_016(identity: &[u8]) -> Vec<u8> {
     let mut flash = vec![0xFF; FLASH_SIZE];
     let mut app = vec![0xFF; 0x1C0];
     let files: [(&str, usize, &[u8]); 3] = [
-        ("app.bin", 0x140, b"FM-1_016\0"), ("cfg_tool.bin", 0x160, b"config"), ("DX7.bin", 0x180, &[0x5A; 64]),
+        ("app.bin", 0x140, identity), ("cfg_tool.bin", 0x160, b"config"), ("DX7.bin", 0x180, &[0x5A; 64]),
     ];
     let mut entries = vec![("app_area_head", 0x83, 0x02000140, app.len(), 0)];
     for &(name, at, data) in &files {
@@ -185,6 +191,115 @@ fn fm1_016_identification_map_and_dx7_checksum() {
     assert_eq!(region_ranges(&map, Region::Free), "A9-B9, ED-FE");
     flash[BOOT_AREA + 0x180] ^= 1;
     assert_eq!(app_files_status(&flash, CHIP_KEY), AppStatus::BadCrc, "DX7.bin is checked along with app.bin and cfg_tool.bin");
+}
+
+/// A .fwsc with `flash` as its flash.bin and `identity` woven in, as
+/// `Package::parse` documents the format.
+fn package(identity: &str, flash: &[u8]) -> Vec<u8> {
+    const LIST_END: usize = 0x40 + 0x50;
+    let mut entry = [0u8; 0x50];
+    entry[4..6].copy_from_slice(&crc16(flash).to_le_bytes());
+    entry[8..12].copy_from_slice(&(LIST_END as u32).to_le_bytes());
+    entry[12..16].copy_from_slice(&(flash.len() as u32).to_le_bytes());
+    entry[0x40..0x49].copy_from_slice(b"flash.bin");
+    let list = enc(&entry, 0xFFFF);
+    let mut head = [0u8; 0x40];
+    head[2..4].copy_from_slice(&crc16(&list).to_le_bytes());
+    head[8..10].copy_from_slice(&1u16.to_le_bytes());
+    let crc = crc16(&head[2..]);
+    head[..2].copy_from_slice(&crc.to_le_bytes());
+    let mut image = enc(&head, 0xFFFF);
+    image.extend_from_slice(&list);
+    image.extend_from_slice(flash);
+    let mut raw = vec![];
+    for i in 0..20 {
+        raw.extend_from_slice(&image[i * 47..(i + 1) * 47]);
+        raw.push(identity.as_bytes().get(i).map_or(0x7D, |c| c + i as u8 + 1));
+    }
+    raw.extend_from_slice(&image[20 * 47..]);
+    raw
+}
+
+/// A session on a unit holding `flash`, with the FM-1's flash chip.
+fn fm1_session(flash: Vec<u8>, name: &str) -> Session<FakeFlash> {
+    let mut f = own(flash, name);
+    f.id = FM1.flash_id;
+    session_with(f)
+}
+
+#[test]
+fn minifm_is_identified_as_an_fm1() {
+    let flash = image_016(b"MiniFM_016\0");
+    let a = Analysis::new(&flash, Some(FM1.flash_id), CHIP_KEY);
+    assert_eq!(a.board, Some(&FM1));
+    assert!(a.certain);
+    assert_eq!(a.model_name.as_deref(), Some("MiniFM"));
+    assert_eq!(a.firmware_text, "MiniFM 016 (stock)");
+    assert_eq!(a.app_status, AppStatus::Ok);
+}
+
+#[test]
+fn minifm_and_fm1_cross_flash_both_ways() {
+    let fm1 = fm1_016_image();
+    let mini = image_016(b"MiniFM_016\0");
+    let fm1_pkg = package("FM-1_016", &fm1[..0xA9000]);
+    let mini_pkg = package("MiniFM_016", &mini[..0xA9000]);
+
+    let mut s = fm1_session(mini.clone(), "minifm-to-fm1");
+    let p = s.plan_firmware(&fm1_pkg, false, false).unwrap();
+    assert!(p.warnings.iter().any(|w| w.contains("report itself")), "{:?}", p.warnings);
+    assert_eq!(p.warnings.len(), 1, "the layouts are the same: {:?}", p.warnings);
+    apply(&mut s, &p).unwrap();
+    assert_eq!(s.analysis.firmware_text, "FM-1 016 (stock)");
+    assert_eq!(s.analysis.app_status, AppStatus::Ok);
+    assert_eq!(std::fs::read(s.backup_path.as_ref().unwrap()).unwrap(), mini, "the MiniFM firmware can be restored");
+
+    let p = s.plan_firmware(&mini_pkg, false, false).unwrap();
+    assert!(p.warnings.iter().any(|w| w.contains("report itself")), "{:?}", p.warnings);
+    apply(&mut s, &p).unwrap();
+    assert_eq!(s.analysis.firmware_text, "MiniFM 016 (stock)");
+    assert_eq!(s.analysis.app_status, AppStatus::Ok);
+
+    // the model's own package: nothing to warn about
+    assert!(s.plan_firmware(&mini_pkg, false, false).unwrap().warnings.is_empty());
+    assert!(fm1_session(fm1, "fm1-to-fm1").plan_firmware(&fm1_pkg, false, false).unwrap().warnings.is_empty());
+}
+
+#[test]
+fn minifm_package_is_refused_on_an_smk37() {
+    let mut s = fm1_session(image_016(b"MiniFM_016\0"), "minifm-on-smk37");
+    s.board_override = Some(&SMK37);
+    let mini_pkg = package("MiniFM_016", &image_016(b"MiniFM_016\0")[..0xA9000]);
+    assert!(matches!(s.plan_firmware(&mini_pkg, false, false), Err(Error::Refused(_))));
+}
+
+#[test]
+fn minifm_016_vendor_package() {
+    let raw = need!("minifm-016.fwsc");
+    let fm1_raw = need!("fm1-016.fwsc");
+    let pkg = Package::parse(&raw).unwrap();
+    assert_eq!(pkg.identity, "MiniFM_016");
+    assert_eq!(pkg.model(), "MiniFM");
+    assert_eq!(pkg.flash.len(), 0xA9000);
+    assert_eq!(app_files_status(&pkg.flash, CHIP_KEY), AppStatus::Ok);
+    let fm1 = Package::parse(&fm1_raw).unwrap();
+    assert_eq!(pkg.flash[..BOOT_AREA], fm1.flash[..BOOT_AREA], "the same boot area");
+    let mut padded = pkg.flash.clone();
+    padded.resize(FLASH_SIZE, 0xFF);
+    let a = Analysis::new(&padded, Some(FM1.flash_id), CHIP_KEY);
+    assert_eq!(a.board, Some(&FM1));
+    assert!(a.certain);
+    assert_eq!(a.firmware_text, "MiniFM 016 (stock)");
+
+    let mut s = fm1_session(padded.clone(), "minifm-016-vendor");
+    let p = s.plan_firmware(&fm1_raw, false, false).unwrap();
+    assert_eq!(p.warnings.len(), 1, "only the changed name: {:?}", p.warnings);
+    apply(&mut s, &p).unwrap();
+    assert_eq!(s.analysis.firmware_text, "FM-1 016 (stock)");
+    assert_eq!(s.analysis.app_status, AppStatus::Ok);
+    let p = s.plan_firmware(&raw, false, false).unwrap();
+    apply(&mut s, &p).unwrap();
+    assert_eq!(s.dev.mem, padded, "back to the MiniFM firmware, byte for byte");
 }
 
 #[test]

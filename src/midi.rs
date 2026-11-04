@@ -3,8 +3,9 @@
 //! The firmwares answer the SysEx `F0 22 24 35 7D F7` on their first MIDI port
 //! by restarting into the chip's USB download mode: M-VAVE's stock firmware on
 //! the FM-1 (015), the SMK-37 Pro (016) and the SMK-37 Elite (016), and
-//! Felucca. So a unit that is running normally, even with the stock bootloader,
-//! can be reached without holding any keys.
+//! Felucca; the same handler is in the Fame MiniFM's 016. So a unit that is
+//! running normally, even with the stock bootloader, can be reached without
+//! holding any keys.
 //!
 //! Linux sends through the kernel's ALSA sequencer interface (`/dev/snd/seq`),
 //! which shares the port with PipeWire, browsers and DAWs, with libc only, so
@@ -16,7 +17,8 @@ pub const SOFT_KEY: [u8; 6] = [0xF0, 0x22, 0x24, 0x35, 0x7D, 0xF7];
 
 /// Names under which the units appear on USB MIDI, each unit with the
 /// spellings its name may take. Nothing else is ever sent the soft key.
-const NAMES: [(&str, &[&str]); 3] = [("FM-1", &["FM-1", "FM1"]), ("SMK-37", &["SMK-37", "SMK37"]), ("Felucca", &["Felucca"])];
+const NAMES: [(&str, &[&str]); 3] =
+    [("FM-1", &["FM-1", "FM1", "MiniFM"]), ("SMK-37", &["SMK-37", "SMK37"]), ("Felucca", &["Felucca"])];
 
 /// A unit found on USB MIDI.
 pub struct MidiUnit {
@@ -422,6 +424,9 @@ mod tests {
         // spelled without the dash, still one port per unit
         let d = names(&["SMK37 Elite", "MIDIOUT2 (SMK37 Elite)", "FM1_MONITOR", "MIDIMON FM-1"]);
         assert_eq!(first_ports(&d).len(), 2);
+        // the Fame MiniFM, the FM-1 under another name
+        let m = names(&["MIDIOUT2 (MiniFM Midi)", "MiniFM Midi"]);
+        assert_eq!(first_ports(&m), vec![1]);
     }
 
     #[test]
@@ -431,6 +436,7 @@ mod tests {
         assert_eq!(asound_cards(t), vec![(0, "HDA Intel PCH".to_string()), (3, "SMK-37 Elite".to_string())]);
         assert!(known("SMK-37 Elite") && known("FM-1") && known("Felucca Update") && !known("HDA Intel PCH"));
         assert!(known("SMK37 Pro") && known("FM1_MONITOR") && known("MIDIMON FM-1"));
+        assert!(known("MiniFM") && known("MiniFM Midi"));
     }
 
     /// On Linux with a sequencer: `aseqdump` (from alsa-utils) shows its port,
