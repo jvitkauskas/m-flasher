@@ -98,6 +98,11 @@ area. The app warns before such a cross-flash, because the unit then reports
 itself as the other model and M-UPGRADE only accepts that model's packages. The
 backup made before the write brings the original firmware back.
 
+**`BAD CONFIG` on the unit's screen:** m-bootloader before 1.3 rejects the boot
+configuration of FM-1 016, which M-UPGRADE writes when it installs 016, and stops
+at its menu on every start. **Boot app** in the menu still starts the firmware.
+Installing the bundled m-bootloader 1.3 or newer fixes it.
+
 Backups go to `Documents/M-Flasher/backups` in your home folder; the
 **Backups** link at the top of the window opens it.
 

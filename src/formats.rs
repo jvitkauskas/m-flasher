@@ -252,6 +252,16 @@ pub fn bootloader_identity(boot: &[u8]) -> Option<(String, String)> {
     Some((cstr(&p[0x48..0x50]), cstr(&p[0x50..0x70])))
 }
 
+/// The system clock the unit's own boot configuration asks for, in Hz.
+pub fn config_sys_clk(flash: &[u8]) -> Option<u32> {
+    let t = boot_table(flash);
+    let e = t.iter().find(|e| e.name == "isd_config.ini")?;
+    let c = flash.get(e.addr as usize..(e.addr + e.len) as usize)?;
+    const KEY: &[u8] = b"SYS_CLK\0";
+    let at = c.windows(KEY.len()).position(|w| w == KEY)? + KEY.len();
+    (at + 4 <= c.len()).then(|| u32le(c, at))
+}
+
 /// The uboot.boot container stored in a boot area.
 pub fn stored_bootloader(flash: &[u8]) -> Option<Vec<u8>> {
     let t = boot_table(flash);
