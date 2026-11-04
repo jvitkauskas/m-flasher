@@ -43,4 +43,6 @@ backup can repair.
 - The synth sounds (USR), which official updates never write, come back only
   from a backup. FM-1 016 overwrites them once it runs, so going from 016 back to
   015 leaves garbage preset names and wrong pitch, whichever bootloader is
-  installed, until a backup with the original area is restored.
+  installed, until a backup with the original area is restored. Baud Girl also
+  overwrites them, so stock firmware installed after it on an SMK-37 has no
+  presets until then.
