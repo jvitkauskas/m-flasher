@@ -308,7 +308,7 @@ fn with_boot_area(mut flash: Vec<u8>, boot: &[u8]) -> Vec<u8> {
     let crc = crc16(&head[2..]);
     head[..2].copy_from_slice(&crc.to_le_bytes());
     flash[..32].copy_from_slice(&enc(&head, 0xFFFF));
-    let table: [(&str, u32, u32); 3] = [("uboot.boot", BOOT_AT as u32, 16), ("isd_config.ini", 0x3938, 16), ("app_dir_head", 0x4000, 0)];
+    let table: [(&str, u32, u32); 3] = [("uboot.boot", BOOT_AT as u32, 16), ("isd_config.ini", 0x3938, 64), ("app_dir_head", 0x4000, 0)];
     for (i, (name, addr, len)) in table.iter().enumerate() {
         let mut e = [0u8; 32];
         e[4..8].copy_from_slice(&addr.to_le_bytes());
@@ -351,6 +351,45 @@ fn installing_m_bootloader_warns_about_an_untested_flash_chip() {
     for id in [FM1.flash_id, SMK37.flash_id] {
         assert!(with_chip(id, "tested-chip").plan_bootloader(None, None).unwrap().warnings.is_empty());
     }
+}
+
+/// `boot` with its version text replaced, its checksums made good again.
+fn with_version(boot: &[u8], version: &str) -> Vec<u8> {
+    let mut b = boot.to_vec();
+    let offset = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
+    let size = u16::from_le_bytes(b[2..4].try_into().unwrap()) as usize;
+    b[offset + 0x50..offset + 0x70].fill(0);
+    b[offset + 0x50..offset + 0x50 + version.len()].copy_from_slice(version.as_bytes());
+    let crc = crc16(&b[offset..offset + size]);
+    b[12..14].copy_from_slice(&crc.to_le_bytes());
+    let crc = crc16(&b[..14]);
+    b[14..16].copy_from_slice(&crc.to_le_bytes());
+    b
+}
+
+#[test]
+fn an_older_bootloader_warns_on_fm1_016s_configuration() {
+    let (boot, version) = bundled_bootloader(&FM1).unwrap();
+    assert!(version.starts_with("1.3"), "the bundled build takes it: {version}");
+    let flash_with = |hz: u32| {
+        let mut flash = with_boot_area(fm1_016_image(), boot);
+        flash[0x3938 + 16..0x3938 + 24].copy_from_slice(b"SYS_CLK\0");
+        flash[0x3938 + 24..0x3938 + 28].copy_from_slice(&hz.to_le_bytes());
+        flash
+    };
+    assert_eq!(crate::formats::config_sys_clk(&flash_with(320_000_000)), Some(320_000_000));
+    let warned = |hz: u32, b: Option<&[u8]>| {
+        let mut f = own(flash_with(hz), "boot-config");
+        f.id = FM1.flash_id;
+        session_with(f).plan_bootloader(b, None).unwrap().warnings.iter().any(|w| w.contains("BAD CONFIG"))
+    };
+    let old = with_version(boot, "1.2-22e2559");
+    assert!(warned(320_000_000, Some(&old)));
+    assert!(warned(320_000_000, Some(&with_version(boot, "abc1234"))), "the earlier bootloader's bare hashes");
+    assert!(!warned(360_000_000, Some(&old)), "015's configuration is fine");
+    assert!(!warned(320_000_000, Some(&with_version(boot, "1.3-6c321e9"))));
+    assert!(!warned(320_000_000, Some(boot)));
+    assert!(!warned(320_000_000, None), "the bundled build");
 }
 
 #[test]

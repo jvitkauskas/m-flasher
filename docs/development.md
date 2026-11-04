@@ -99,6 +99,12 @@ Puya P25Q80H (`0x856014`). Owners report backups and restores with M-Flasher on
 it, but m-bootloader has not been tested on it, and one unit did not start after
 installing it ([#13](https://github.com/jvitkauskas/m-flasher/issues/13)).
 
+m-bootloader 1.3 and flash loader 1.3, on an SMK-37 Pro from Linux: installing
+it, booting its firmware and stock 016, swapping with the older loader in both
+directions, and installing stock firmware and restoring, ending byte-identical.
+On an FM-1, the build just before it boots with both the 015 and 016 boot
+configurations. Not yet tried on Windows or macOS, or with M-UPGRADE.
+
 On an SMK-37 Pro, from Linux, Windows and macOS (an M3 Mac): identifying
 stock firmware, Baud Girl and Snoop37; backups (identical to jl-uboot-tool's
 reads); installing m-bootloader; installing stock firmware over Baud

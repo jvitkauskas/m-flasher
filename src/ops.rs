@@ -10,7 +10,7 @@
 use crate::boards::{Analysis, BOARDS, Board, CHIP_KEY, FLASH_SIZE, flash_tested};
 use crate::formats::{
     AppStatus, BOOT_AREA, Package, SECTOR, app_files_status, crc32, app_table, bankcb_check, bootloader_identity,
-    build_boot_area, stored_bootloader,
+    build_boot_area, config_sys_clk, stored_bootloader,
 };
 use crate::jl::{Flash, Show};
 use crate::scsi::ScsiError;
@@ -409,13 +409,20 @@ impl<F: Flash> Session<F> {
         target.extend_from_slice(&self.flash[BOOT_AREA..]);
         // the stock bootloader is what the unit came with
         let id = self.dev.flash_id();
-        let warnings = if package.is_none() && !flash_tested(id) {
-            vec![format!("This unit's flash chip (0x{id:06X}) has not been tested with m-bootloader. An FM-1 with the \
-                          newer chip 0xB36014 did not start after installing it, and why is not known yet: install it at \
-                          your own risk.")]
-        } else {
-            vec![]
-        };
+        let mut warnings = vec![];
+        if package.is_none() && !flash_tested(id) {
+            warnings.push(format!("This unit's flash chip (0x{id:06X}) has not been tested with m-bootloader. An FM-1 with the \
+                                   newer chip 0xB36014 did not start after installing it, and why is not known yet: install it at \
+                                   your own risk."));
+        }
+        // m-bootloader before 1.3 takes only 360 MHz, and FM-1 016's configuration says 320
+        if let Some((_, v)) = bootloader_identity(&boot).filter(|_| package.is_none()) {
+            let old = !v.starts_with(|c: char| c.is_ascii_digit()) || ["1.0", "1.1", "1.2"].iter().any(|o| v.starts_with(o));
+            if old && config_sys_clk(&self.flash).is_some_and(|hz| hz != 360_000_000) {
+                warnings.push(format!("This bootloader ({v}) rejects this unit's boot configuration: it would stop at its menu \
+                                       with BAD CONFIG on every start. Install m-bootloader 1.3 or newer instead."));
+            }
+        }
         Plan::new(title, &self.flash, target, vec![(0, BOOT_AREA)],
                   vec!["Only the boot area (0x00000-0x03FFF) is written; the unit's own configuration in it is kept.".into()],
                   warnings)
