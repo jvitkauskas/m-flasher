@@ -10,7 +10,7 @@
 use crate::boards::{Analysis, BOARDS, Board, CHIP_KEY, FLASH_SIZE, flash_tested};
 use crate::formats::{
     AppStatus, BOOT_AREA, Package, SECTOR, app_files_status, crc32, app_table, bankcb_check, bootloader_identity,
-    build_boot_area, build_short_boot_area, config_sys_clk, reads_config, stored_bootloader,
+    build_boot_area, build_short_boot_area, config_cut_short, config_sys_clk, reads_config, stored_bootloader,
 };
 use crate::jl::{Flash, Show};
 use crate::scsi::ScsiError;
@@ -423,8 +423,8 @@ impl<F: Flash> Session<F> {
                 "Only the boot area (0x00000-0x03FFF) is written; the unit's own configuration in it is kept."),
             None => (build_short_boot_area(&self.flash, &boot)
                 .map_err(|e| Error::Refused(format!("{}; install firmware with its bootloader instead", e.0)))?,
-                "Only the boot area (0x00000-0x03FFF) is written. Of the unit's configuration, which this bootloader does \
-                 not read, only the chip key that firmware installers need is kept."),
+                "Only the boot area (0x00000-0x03FFF) is written. This bootloader does not read the unit's configuration, \
+                 so of that only the chip key is kept, with the settings older versions need."),
         };
         let mut target = area;
         target.extend_from_slice(&self.flash[BOOT_AREA..]);
@@ -441,7 +441,7 @@ impl<F: Flash> Session<F> {
             match bootloader_identity(&boot) {
                 Some((_, v)) => {
                     // before 1.3 only 360 MHz is taken, and FM-1 016's configuration says
-                    // 320; before 1.4 a configuration cut short is not taken either
+                    // 320; 2.0's short configuration, without settings, is not taken either
                     let before_1_3 = !v.starts_with(|c: char| c.is_ascii_digit())
                         || ["1.0", "1.1", "1.2"].iter().any(|o| v.starts_with(o));
                     if hz.is_none_or(|hz| before_1_3 && hz != 360_000_000) {
@@ -449,7 +449,7 @@ impl<F: Flash> Session<F> {
                                                its menu with BAD CONFIG on every start. Install m-bootloader 1.4 or newer instead."));
                     }
                 }
-                None if hz.is_none() => warnings.push(
+                None if config_cut_short(&self.flash) => warnings.push(
                     "This unit's boot configuration has been cut short, and this bootloader may need all of it: the unit may \
                      not start. To put back the stock bootloader, use its official package instead.".into()),
                 None => {}
