@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  sequence_diagrams: false
+  suggested_reviewers: false
+  in_progress_fortune: false
+  auto_review:
+    # Stacked PRs target other branches.
+    base_branches:
+      - ".*"
+  path_instructions:
+    - path: "**"
+      instructions: |
+        Rust desktop app for Linux, macOS and Windows that writes the flash of
+        synthesizers. docs/safety.md lists what it promises. Put changes that
+        weaken those promises and mistakes that can brick a unit or lose its
+        data first, and skip style.
+    - path: "data/NOTICE.md"
+      instructions: |
+        Must name the m-bootloader release the bundled files come from.
