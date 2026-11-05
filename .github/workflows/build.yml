@@ -114,7 +114,7 @@ jobs:
           path: M-Flasher-windows.zip
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - run: rustup target add x86_64-apple-darwin
