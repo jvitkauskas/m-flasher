@@ -97,6 +97,7 @@ fn download_mode() -> Result<(), Error> {
     }
     let units = crate::midi::find_units();
     let unit = match units.len() {
+        0 if crate::scsi::needs_sg_driver() => return Err(Error::Refused(SG_DRIVER.into())),
         0 => return Err(Error::Refused("no FM-1 or SMK-37 found on USB MIDI: is it switched on and connected?".into())),
         1 => &units[0],
         _ => return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into())),
