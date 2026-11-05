@@ -101,8 +101,8 @@ backup made before the write brings the original firmware back.
 **`BAD CONFIG` on the unit's screen:** m-bootloader before 1.3 rejects the boot
 configuration of FM-1 016, which M-UPGRADE writes when it installs 016, and stops
 at its menu on every start. **Boot app** in the menu still starts the firmware.
-Installing the bundled m-bootloader fixes it. Any version before 1.4 does the same
-on a unit whose configuration 1.4 cut short, including one installed by another
+Installing the bundled m-bootloader fixes it. Any version before 2.0 does the same
+on a unit whose configuration 2.0 cut short, including one installed by another
 tool: Melodee's installer offers m-bootloader 1.2 as an option, for example, so
 leave that option unticked.
 

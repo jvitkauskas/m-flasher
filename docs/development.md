@@ -96,8 +96,10 @@ their SVGs.
 
 FM-1s sold from late 2026 have a UCUN UC25HQ80 flash (`0xB36014`) in place of the
 Puya P25Q80H (`0x856014`). Owners report backups and restores with M-Flasher on
-it, but m-bootloader has not been tested on it, and one unit did not start after
-installing it ([#13](https://github.com/jvitkauskas/m-flasher/issues/13)).
+it. One unit did not start after m-bootloader 1.1 or 1.2 was installed, and another
+runs 1.3 with its firmware, menu and download mode working
+([#13](https://github.com/jvitkauskas/m-flasher/issues/13)). Version 2.0 has not been
+tried on it.
 
 m-bootloader 1.3 and flash loader 1.3, on an SMK-37 Pro from Linux: installing
 it, booting its firmware and stock 016, swapping with the older loader in both
@@ -105,16 +107,17 @@ directions, and installing stock firmware and restoring, ending byte-identical.
 On an FM-1, the build just before it boots with both the 015 and 016 boot
 configurations. Not yet tried on Windows or macOS, or with M-UPGRADE.
 
-m-bootloader 1.4 does not read the boot configuration, so installing it keeps
+m-bootloader 2.0 does not read the boot configuration, so installing it keeps
 only the 34-byte chip-key record, at `0x3FDC`, and it may use the room up to
 there. The ROM loads a full-size image on an FM-1 and an SMK-37. Build
-`1.4-ac26c70`, on the same two units: installing with M-Flasher and M-UPGRADE gives
-the same boot area from every starting configuration, stock firmware runs, and
-putting stock back and Baud Girl's installer both restore the full configuration.
-On the FM-1, official 015 and 016 updates restore it too, and SLOOP, Felucca,
-ChoralRoot and Melodee install without touching the boot area. The SMK-37's own
-official update has not been run from it: its firmware 900 refuses at `FAILED -5`,
-and from stock 016 M-UPGRADE needs force upgrade. The stock bootloader reads the
+`2.0-c43a32f`, on the same two units: installing with M-Flasher over 1.3 and with
+M-UPGRADE over 1.2, stock firmware, official 016 updates and Baud Girl's installer,
+which restore the full configuration, and browser installers from running firmware
+and from MIDI mode, which leave the boot area alone. On the FM-1 also M-UPGRADE from
+the stock bootloader, giving the same boot area as over 1.2, and on macOS and Windows,
+putting stock back and installing it again. An SMK-37 on firmware 900 refuses
+M-VAVE's update at `FAILED -5`, and M-UPGRADE refuses an equal version, so its 016
+update there used a copy of the package labelled `099`. The stock bootloader reads the
 keys, so it goes back with its package's whole boot area. Older M-Flasher versions
 keep the unit's configuration when putting it back, so do not use them for that
 on such a unit.
