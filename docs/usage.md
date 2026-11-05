@@ -79,8 +79,8 @@ stock firmware takes about half a minute).
 | **Back up the whole flash** | nothing: saves the 1 MiB flash image and a `.json` describing it |
 | **Restore a backup** | the parts that differ; a backup of another unit keeps this unit's own factory data (calibration, Bluetooth address) |
 | **Install firmware (.fwsc)** | the firmware from an M-VAVE package (or a custom one in the same format); optionally the package's stock bootloader, and optionally erasing the settings and Bluetooth pairings |
-| **Install m-bootloader** | the boot area only (16 KiB), the build for the identified model |
-| **Put back the stock bootloader** | the boot area only, from an official package |
+| **Install m-bootloader** | the boot area only (16 KiB), the build for the identified model; of the unit's boot configuration, which it does not read, only the chip key that firmware installers need is kept |
+| **Put back the stock bootloader** | the boot area only, all of it from an official package, the full configuration included |
 
 Use the official `.fwsc` files from M-VAVE's website as they are: no
 conversion is needed. FM-1 **016** is supported, including its DX7 data file
@@ -101,7 +101,16 @@ backup made before the write brings the original firmware back.
 **`BAD CONFIG` on the unit's screen:** m-bootloader before 1.3 rejects the boot
 configuration of FM-1 016, which M-UPGRADE writes when it installs 016, and stops
 at its menu on every start. **Boot app** in the menu still starts the firmware.
-Installing the bundled m-bootloader 1.3 or newer fixes it.
+Installing the bundled m-bootloader fixes it. Any released version before 2.0 also
+stops with `BAD CONFIG` on a unit whose configuration 2.0 cut short, including one
+installed by another tool: Melodee's installer offers m-bootloader 1.2 as an option,
+for example, so leave that option unticked.
+
+**`FAILED -5` on the unit's screen:** Melodee's **Return to official V15**, and
+M-UPGRADE on an SMK-37 running Felucca-family firmware, stop there because the
+unit's boot area differs from the package's, as it does with any m-bootloader.
+The boot area and firmware stay as they were. Restore a backup with M-Flasher
+instead, or install the firmware and put back the stock bootloader.
 
 Backups go to `Documents/M-Flasher/backups` in your home folder; the
 **Backups** link at the top of the window opens it.

@@ -5,7 +5,7 @@
 //! skipped without it.
 
 use crate::boards::{Analysis, CHIP_KEY, FLASH_SIZE, FM1, SMK37};
-use crate::formats::{AppStatus, BOOT_AREA, BOOT_AT, Package, app_files_status, app_table, boot_table, bootloader_identity,
+use crate::formats::{AppStatus, BOOT_AREA, BOOT_AT, CONFIG_AT, CONFIG_KEEP, Package, app_files_status, app_table, boot_table, bootloader_identity,
                      build_boot_area, crc16, enc, stored_bootloader};
 use crate::jl::Flash;
 use crate::ops::{Error, Plan, Session, bundled_bootloader};
@@ -129,7 +129,7 @@ fn bundled_bootloaders() {
     for b in [&FM1, &SMK37] {
         let (boot, _) = bundled_bootloader(b).unwrap();
         assert_eq!(bootloader_identity(boot).unwrap().0, b.tag);
-        assert!(0xA0 + boot.len() <= 0x38D0);
+        assert!(BOOT_AT + boot.len() <= CONFIG_AT);
     }
 }
 
@@ -318,6 +318,10 @@ fn with_boot_area(mut flash: Vec<u8>, boot: &[u8]) -> Vec<u8> {
         e[..2].copy_from_slice(&crc.to_le_bytes());
         flash[0x20 + i * 32..0x40 + i * 32].copy_from_slice(&enc(&e, 0xFFFF));
     }
+    // a good chip-key record, then the rest of the configuration
+    let key: Vec<u8> = (0..32u8).collect();
+    flash[0x3938..0x3958].copy_from_slice(&key);
+    flash[0x3958..0x395A].copy_from_slice(&crc16(&key).to_le_bytes());
     let area = build_boot_area(&flash, boot).unwrap();
     flash[..BOOT_AREA].copy_from_slice(&area);
     flash
@@ -370,11 +374,13 @@ fn with_version(boot: &[u8], version: &str) -> Vec<u8> {
 #[test]
 fn an_older_bootloader_warns_on_fm1_016s_configuration() {
     let (boot, version) = bundled_bootloader(&FM1).unwrap();
-    assert!(version.starts_with("1.3"), "the bundled build takes it: {version}");
+    assert!(!crate::formats::reads_config(boot), "the bundled build reads no configuration: {version}");
+    assert!(!crate::formats::reads_config(&with_version(boot, "2.0-abc1234")), "newer majors read none either");
+    assert!(crate::formats::reads_config(&with_version(boot, "1.3-6c321e9")));
     let flash_with = |hz: u32| {
         let mut flash = with_boot_area(fm1_016_image(), boot);
-        flash[0x3938 + 16..0x3938 + 24].copy_from_slice(b"SYS_CLK\0");
-        flash[0x3938 + 24..0x3938 + 28].copy_from_slice(&hz.to_le_bytes());
+        flash[0x3938 + 40..0x3938 + 48].copy_from_slice(b"SYS_CLK\0");
+        flash[0x3938 + 48..0x3938 + 52].copy_from_slice(&hz.to_le_bytes());
         flash
     };
     assert_eq!(crate::formats::config_sys_clk(&flash_with(320_000_000)), Some(320_000_000));
@@ -387,9 +393,87 @@ fn an_older_bootloader_warns_on_fm1_016s_configuration() {
     assert!(warned(320_000_000, Some(&old)));
     assert!(warned(320_000_000, Some(&with_version(boot, "abc1234"))), "the earlier bootloader's bare hashes");
     assert!(!warned(360_000_000, Some(&old)), "015's configuration is fine");
-    assert!(!warned(320_000_000, Some(&with_version(boot, "1.3-6c321e9"))));
+    assert!(!warned(320_000_000, Some(&with_version(boot, "1.3-6c321e9"))), "1.3 takes 320 MHz");
+    assert!(!warned(320_000_000, Some(&with_version(boot, "1.4-ac26c70"))));
+    assert!(!warned(320_000_000, Some(&with_version(boot, "2.0-abc1234"))));
     assert!(!warned(320_000_000, Some(boot)));
     assert!(!warned(320_000_000, None), "the bundled build");
+}
+
+/// An FM-1 session on `flash`.
+fn fm1_on(flash: Vec<u8>) -> Session<FakeFlash> {
+    fm1_session(flash, "short-config")
+}
+
+#[test]
+fn installing_m_bootloader_cuts_the_configuration_short() {
+    let (boot, _) = bundled_bootloader(&FM1).unwrap();
+    let old = with_version(boot, "1.3-6c321e9");
+    let flash = with_boot_area(fm1_016_image(), &old);
+    let key = flash[0x3938..0x3938 + CONFIG_KEEP].to_vec();
+    let mut s = fm1_on(flash.clone());
+    let p = s.plan_bootloader(None, None).unwrap();
+    assert_eq!(p.allowed, vec![(0, BOOT_AREA)]);
+    assert_eq!(&p.target[BOOT_AREA..], &flash[BOOT_AREA..], "nothing else");
+    apply(&mut s, &p).unwrap();
+    assert_eq!(stored_bootloader(&s.dev.mem).unwrap(), boot);
+    let config = &boot_table(&s.dev.mem)[1];
+    assert_eq!((config.addr as usize, config.len as usize), (CONFIG_AT, CONFIG_KEEP));
+    assert_eq!(&s.dev.mem[CONFIG_AT..CONFIG_AT + CONFIG_KEEP], &key[..]);
+    assert_eq!(crate::formats::config_sys_clk(&s.dev.mem), None);
+    // the same again writes nothing
+    assert!(s.plan_bootloader(None, None).unwrap().sectors.is_empty());
+    // an older bootloader over the short configuration: warned
+    let p = s.plan_bootloader(Some(&old), None).unwrap();
+    assert!(p.warnings.iter().any(|w| w.contains("BAD CONFIG")), "{:?}", p.warnings);
+    assert_eq!(boot_table(&p.target)[1].addr as usize, CONFIG_AT, "it can only keep what is there");
+    // a damaged chip key: refused, and nothing is planned
+    let mut damaged = flash.clone();
+    damaged[0x3938] ^= 1;
+    assert!(matches!(fm1_on(damaged).plan_bootloader(None, None), Err(Error::Refused(_))));
+}
+
+#[test]
+fn the_stock_bootloader_comes_with_the_packages_whole_boot_area() {
+    let (boot, _) = bundled_bootloader(&FM1).unwrap();
+    // a stock bootloader: no identity; a package with its own full configuration
+    let stock = with_version(boot, "x");
+    let stock: Vec<u8> = {
+        let mut b = stock;
+        let offset = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
+        let size = u16::from_le_bytes(b[2..4].try_into().unwrap()) as usize;
+        b[offset + 0x40..offset + 0x48].fill(0);
+        let crc = crc16(&b[offset..offset + size]);
+        b[12..14].copy_from_slice(&crc.to_le_bytes());
+        let crc = crc16(&b[..14]);
+        b[14..16].copy_from_slice(&crc.to_le_bytes());
+        b
+    };
+    assert!(bootloader_identity(&stock).is_none());
+    let mut with_config = with_boot_area(fm1_016_image(), &stock);
+    with_config[0x3938 + 40..0x3938 + 48].copy_from_slice(b"SYS_CLK\0");
+    with_config[0x3938 + 48..0x3938 + 52].copy_from_slice(&360_000_000u32.to_le_bytes());
+    let pkg = package("FM-1_016", &with_config[..0xA9000]);
+
+    let mut s = fm1_on(with_config.clone());
+    let p = s.plan_bootloader(None, None).unwrap();
+    apply(&mut s, &p).unwrap();
+    assert_eq!(crate::formats::config_sys_clk(&s.dev.mem), None, "cut short");
+    let p = s.plan_bootloader(None, Some(&pkg)).unwrap();
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    apply(&mut s, &p).unwrap();
+    assert_eq!(s.dev.mem[..BOOT_AREA], with_config[..BOOT_AREA], "the whole configuration is back");
+    assert_eq!(crate::formats::config_sys_clk(&s.dev.mem), Some(360_000_000));
+    // a package for another chip key: its boot area isn't written
+    s.dev.key = 0x1234;
+    let r = s.plan_bootloader(None, Some(&pkg));
+    assert!(matches!(&r, Err(Error::Refused(m)) if m.contains("chip key")), "{:?}", r.err());
+    s.dev.key = 0x980F;
+    // a stock bootloader from a file, over a short configuration: warned
+    let p = s.plan_bootloader(None, None).unwrap();
+    apply(&mut s, &p).unwrap();
+    let p = s.plan_bootloader(Some(&stock), None).unwrap();
+    assert!(p.warnings.iter().any(|w| w.contains("cut short")), "{:?}", p.warnings);
 }
 
 #[test]
@@ -541,16 +625,13 @@ fn fm1_016_bootloader_replacement_on_both_layouts() {
     let mut new = pkg.flash.clone();
     new.resize(FLASH_SIZE, 0xFF);
     for original in [need!("fm1-stock.bin"), new] {
-        let original_config = &boot_table(&original)[1];
-        let at = original_config.addr as usize;
-        let len = original_config.len as usize;
         let mut f = own(original.clone(), "fm1-016-bootloader");
         f.id = FM1.flash_id;
         let mut s = session_with(f);
         let p = s.plan_bootloader(None, Some(&raw)).unwrap();
         assert_eq!(p.allowed, vec![(0, BOOT_AREA)]);
         assert_eq!(&p.target[BOOT_AREA..], &original[BOOT_AREA..]);
-        assert_eq!(&p.target[0x3938..0x3938 + len], &original[at..at + len]);
+        assert_eq!(p.target[..BOOT_AREA], pkg.flash[..BOOT_AREA], "the package's whole boot area");
         apply(&mut s, &p).unwrap();
         assert_eq!(stored_bootloader(&s.dev.mem).unwrap(), stock_boot);
         let stock = s.dev.mem.clone();
@@ -558,7 +639,8 @@ fn fm1_016_bootloader_replacement_on_both_layouts() {
         let p = s.plan_bootloader(None, None).unwrap();
         apply(&mut s, &p).unwrap();
         assert_eq!(bootloader_identity(&stored_bootloader(&s.dev.mem).unwrap()).unwrap().0, "fm1");
-        assert_eq!(&s.dev.mem[0x3938..], &stock[0x3938..]);
+        assert_eq!(&s.dev.mem[BOOT_AREA..], &stock[BOOT_AREA..]);
+        assert_eq!(boot_table(&s.dev.mem)[1].addr as usize, CONFIG_AT);
         let p = s.plan_bootloader(None, Some(&raw)).unwrap();
         apply(&mut s, &p).unwrap();
         assert_eq!(s.dev.mem, stock);
@@ -608,7 +690,8 @@ fn open_bootloader_and_back_to_stock() {
     assert!(!p.sectors.is_empty() && p.sectors.iter().all(|&a| a < BOOT_AREA));
     apply(&mut s, &p).unwrap();
     assert_eq!(bootloader_identity(&stored_bootloader(&s.dev.mem).unwrap()).unwrap().0, "smk37");
-    assert_eq!(s.dev.mem[0x38D0..], stock[0x38D0..]);
+    assert_eq!(s.dev.mem[BOOT_AREA..], stock[BOOT_AREA..]);
+    assert_eq!(boot_table(&s.dev.mem)[1].addr as usize, CONFIG_AT);
     let p = s.plan_bootloader(None, Some(&need!("smk37-016.fwsc"))).unwrap();
     apply(&mut s, &p).unwrap();
     assert_eq!(s.dev.mem, stock);
@@ -1060,4 +1143,27 @@ fn restart_avoids_the_running_loader() {
     assert_eq!(c.restart().unwrap(), 0x01C2_0000);
     let mut c = ram_unit(MockRom { loader: Some(("1.0", 0x01C2_0000)), ..Default::default() });
     assert_eq!(c.restart().unwrap(), 0x01C2_8000);
+}
+
+#[test]
+fn asks_for_the_sg_driver_only_when_a_unit_needs_it() {
+    use crate::scsi::sg_missing_for_unit;
+    let root = std::env::temp_dir().join(format!("mflasher-sg-{}", std::process::id()));
+    let (class, usb) = (root.join("scsi_generic"), root.join("usb"));
+    let device = |name: &str, vendor: &str, product: &str| {
+        let d = usb.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("idVendor"), format!("{vendor}\n")).unwrap();
+        std::fs::write(d.join("idProduct"), format!("{product}\n")).unwrap();
+    };
+    assert!(!sg_missing_for_unit(&class, &usb), "no USB at all");
+    device("1-1", "4c4a", "c755");
+    device("1-2", "05ac", "8057");
+    std::fs::create_dir(usb.join("usb1")).unwrap();
+    assert!(!sg_missing_for_unit(&class, &usb), "running firmware and other devices");
+    device("1-3", "4c4a", "8057");
+    assert!(sg_missing_for_unit(&class, &usb), "the unit in download mode, no driver");
+    std::fs::create_dir(&class).unwrap();
+    assert!(!sg_missing_for_unit(&class, &usb), "driver loaded");
+    std::fs::remove_dir_all(&root).unwrap();
 }
