@@ -5,7 +5,7 @@
 //! skipped without it.
 
 use crate::boards::{Analysis, CHIP_KEY, FLASH_SIZE, FM1, SMK37};
-use crate::formats::{AppStatus, BOOT_AREA, BOOT_AT, CONFIG_AT, CONFIG_KEEP, Package, app_files_status, app_table, boot_table, bootloader_identity,
+use crate::formats::{AppStatus, BOOT_AREA, BOOT_AT, CONFIG_AT, CONFIG_KEY, CONFIG_SIZE, Package, app_files_status, app_table, boot_table, bootloader_identity,
                      build_boot_area, crc16, enc, stored_bootloader};
 use crate::jl::Flash;
 use crate::ops::{Error, Plan, Session, bundled_bootloader};
@@ -410,7 +410,7 @@ fn installing_m_bootloader_cuts_the_configuration_short() {
     let (boot, _) = bundled_bootloader(&FM1).unwrap();
     let old = with_version(boot, "1.3-6c321e9");
     let flash = with_boot_area(fm1_016_image(), &old);
-    let key = flash[0x3938..0x3938 + CONFIG_KEEP].to_vec();
+    let key = flash[0x3938..0x3938 + CONFIG_KEY].to_vec();
     let mut s = fm1_on(flash.clone());
     let p = s.plan_bootloader(None, None).unwrap();
     assert_eq!(p.allowed, vec![(0, BOOT_AREA)]);
@@ -418,15 +418,22 @@ fn installing_m_bootloader_cuts_the_configuration_short() {
     apply(&mut s, &p).unwrap();
     assert_eq!(stored_bootloader(&s.dev.mem).unwrap(), boot);
     let config = &boot_table(&s.dev.mem)[1];
-    assert_eq!((config.addr as usize, config.len as usize), (CONFIG_AT, CONFIG_KEEP));
-    assert_eq!(&s.dev.mem[CONFIG_AT..CONFIG_AT + CONFIG_KEEP], &key[..]);
-    assert_eq!(crate::formats::config_sys_clk(&s.dev.mem), None);
+    assert_eq!((config.addr as usize, config.len as usize), (CONFIG_AT, CONFIG_SIZE));
+    assert_eq!(&s.dev.mem[CONFIG_AT..CONFIG_AT + CONFIG_KEY], &key[..]);
+    assert_eq!(crate::formats::config_sys_clk(&s.dev.mem), Some(360_000_000));
     // the same again writes nothing
     assert!(s.plan_bootloader(None, None).unwrap().sectors.is_empty());
-    // an older bootloader over the short configuration: warned
-    let p = s.plan_bootloader(Some(&old), None).unwrap();
+    // an older bootloader over it: its settings are there, so no warning
+    for v in ["1.3-6c321e9", "1.2-22e2559"] {
+        let p = s.plan_bootloader(Some(&with_version(boot, v)), None).unwrap();
+        assert!(!p.warnings.iter().any(|w| w.contains("BAD CONFIG")), "{v}: {:?}", p.warnings);
+        assert_eq!(boot_table(&p.target)[1].addr as usize, CONFIG_AT, "it can only keep what is there");
+    }
+    // 2.0's shorter configuration has no settings: warned
+    let mut shorter = s.dev.mem.clone();
+    shorter[CONFIG_AT + CONFIG_KEY..BOOT_AREA].fill(0xFF);
+    let p = fm1_on(shorter).plan_bootloader(Some(&old), None).unwrap();
     assert!(p.warnings.iter().any(|w| w.contains("BAD CONFIG")), "{:?}", p.warnings);
-    assert_eq!(boot_table(&p.target)[1].addr as usize, CONFIG_AT, "it can only keep what is there");
     // a damaged chip key: refused, and nothing is planned
     let mut damaged = flash.clone();
     damaged[0x3938] ^= 1;
@@ -458,7 +465,7 @@ fn the_stock_bootloader_comes_with_the_packages_whole_boot_area() {
     let mut s = fm1_on(with_config.clone());
     let p = s.plan_bootloader(None, None).unwrap();
     apply(&mut s, &p).unwrap();
-    assert_eq!(crate::formats::config_sys_clk(&s.dev.mem), None, "cut short");
+    assert!(crate::formats::config_cut_short(&s.dev.mem));
     let p = s.plan_bootloader(None, Some(&pkg)).unwrap();
     assert!(p.warnings.is_empty(), "{:?}", p.warnings);
     apply(&mut s, &p).unwrap();
