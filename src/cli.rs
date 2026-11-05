@@ -149,6 +149,8 @@ fn restart(path: &str) -> Result<(), Error> {
     Ok(())
 }
 
+const SG_DRIVER: &str = "a unit is in download mode, but the SCSI generic driver is not loaded: run `sudo modprobe sg`, then try again";
+
 /// The unit to use: --device, or the one unit in download mode.
 fn pick_device(device: Option<String>) -> Result<String, Error> {
     if let Some(d) = device {
@@ -159,6 +161,7 @@ fn pick_device(device: Option<String>) -> Result<String, Error> {
         0 if !crate::midi::find_units().is_empty() => {
             Err(Error::Refused("the unit is running, not in download mode: `m-flasher download-mode` switches it".into()))
         }
+        0 if crate::scsi::needs_sg_driver() => Err(Error::Refused(SG_DRIVER.into())),
         0 => Err(Error::Refused("no unit in download mode found (a USB disk \"WL82 UBOOT1.00\")".into())),
         1 => Ok(devs[0].0.clone()),
         _ => Err(Error::Refused("more than one unit in download mode: connect only one, or pass --device".into())),
@@ -297,6 +300,9 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         }
         for u in crate::midi::find_units() {
             println!("midi\t{} (running; download-mode switches it)", u.name);
+        }
+        if crate::scsi::needs_sg_driver() {
+            eprintln!("{SG_DRIVER}");
         }
         return Ok(());
     }

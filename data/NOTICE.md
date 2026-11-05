@@ -1,9 +1,8 @@
 # Bundled files
 
 From [m-bootloader](https://github.com/jvitkauskas/m-bootloader), MIT License,
-(c) 2026 Julius Vitkauskas. The bootloaders are build `1.4-ac26c70` of
-[pull request #6](https://github.com/jvitkauskas/m-bootloader/pull/6), not a
-release yet, and the flash loader is unchanged from v1.3:
+(c) 2026 Julius Vitkauskas. The bootloaders are release candidate `2.0-c43a32f`,
+not a release yet, and the flash loader is unchanged from v1.3:
 
 | File | What | Release file |
 | --- | --- | --- |

@@ -371,3 +371,29 @@ mod imp {
 }
 
 pub use imp::{Device, find_devices};
+
+/// Linux: a unit is in download mode on USB, but the SCSI generic driver that
+/// M-Flasher finds it through isn't loaded.
+#[cfg(all(target_os = "linux", not(feature = "usb")))]
+pub fn needs_sg_driver() -> bool {
+    use std::path::Path;
+    sg_missing_for_unit(Path::new("/sys/class/scsi_generic"), Path::new("/sys/bus/usb/devices"))
+}
+
+#[cfg(not(all(target_os = "linux", not(feature = "usb"))))]
+pub fn needs_sg_driver() -> bool {
+    false
+}
+
+/// The class directory exists once the driver is loaded, even with no disks.
+#[cfg_attr(not(all(target_os = "linux", not(feature = "usb"))), allow(dead_code))]
+pub(crate) fn sg_missing_for_unit(sg_class: &std::path::Path, usb_devices: &std::path::Path) -> bool {
+    if sg_class.exists() {
+        return false;
+    }
+    let Ok(dir) = std::fs::read_dir(usb_devices) else { return false };
+    dir.flatten().any(|e| {
+        let read = |f: &str| std::fs::read_to_string(e.path().join(f)).unwrap_or_default();
+        read("idVendor").trim() == "4c4a" && read("idProduct").trim() == "8057"
+    })
+}

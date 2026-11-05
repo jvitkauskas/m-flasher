@@ -1139,3 +1139,26 @@ fn restart_avoids_the_running_loader() {
     let mut c = ram_unit(MockRom { loader: Some(("1.0", 0x01C2_0000)), ..Default::default() });
     assert_eq!(c.restart().unwrap(), 0x01C2_8000);
 }
+
+#[test]
+fn asks_for_the_sg_driver_only_when_a_unit_needs_it() {
+    use crate::scsi::sg_missing_for_unit;
+    let root = std::env::temp_dir().join(format!("mflasher-sg-{}", std::process::id()));
+    let (class, usb) = (root.join("scsi_generic"), root.join("usb"));
+    let device = |name: &str, vendor: &str, product: &str| {
+        let d = usb.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("idVendor"), format!("{vendor}\n")).unwrap();
+        std::fs::write(d.join("idProduct"), format!("{product}\n")).unwrap();
+    };
+    assert!(!sg_missing_for_unit(&class, &usb), "no USB at all");
+    device("1-1", "4c4a", "c755");
+    device("1-2", "05ac", "8057");
+    std::fs::create_dir(usb.join("usb1")).unwrap();
+    assert!(!sg_missing_for_unit(&class, &usb), "running firmware and other devices");
+    device("1-3", "4c4a", "8057");
+    assert!(sg_missing_for_unit(&class, &usb), "the unit in download mode, no driver");
+    std::fs::create_dir(&class).unwrap();
+    assert!(!sg_missing_for_unit(&class, &usb), "driver loaded");
+    std::fs::remove_dir_all(&root).unwrap();
+}
