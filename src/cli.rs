@@ -109,6 +109,9 @@ fn download_mode() -> Result<(), Error> {
             println!("In download mode: {p}\t{d}");
             return Ok(());
         }
+        if crate::scsi::needs_sg_driver() {
+            return Err(Error::Refused(SG_DRIVER.into()));
+        }
     }
     Err(Error::Refused(format!(
         "the {} did not come back in download mode within 20 s: its firmware may not know the soft key; \

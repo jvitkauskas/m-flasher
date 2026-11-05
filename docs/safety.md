@@ -12,7 +12,8 @@ backup can repair.
   it is not certain, the app says so and asks; a package or bootloader for the
   other model is refused.
 - A firmware package must be for the connected model, and its firmware must
-  decrypt with this unit's chip key.
+  decrypt with this unit's chip key. The same goes for a package the stock
+  bootloader is put back from, as its boot area replaces the unit's.
 - Installing m-bootloader on a flash chip it has not been tested with brings a
   warning.
 - Installing m-bootloader is refused if the unit's chip key is damaged: it is

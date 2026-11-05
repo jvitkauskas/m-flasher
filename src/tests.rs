@@ -464,6 +464,11 @@ fn the_stock_bootloader_comes_with_the_packages_whole_boot_area() {
     apply(&mut s, &p).unwrap();
     assert_eq!(s.dev.mem[..BOOT_AREA], with_config[..BOOT_AREA], "the whole configuration is back");
     assert_eq!(crate::formats::config_sys_clk(&s.dev.mem), Some(360_000_000));
+    // a package for another chip key: its boot area isn't written
+    s.dev.key = 0x1234;
+    let r = s.plan_bootloader(None, Some(&pkg));
+    assert!(matches!(&r, Err(Error::Refused(m)) if m.contains("chip key")), "{:?}", r.err());
+    s.dev.key = 0x980F;
     // a stock bootloader from a file, over a short configuration: warned
     let p = s.plan_bootloader(None, None).unwrap();
     apply(&mut s, &p).unwrap();

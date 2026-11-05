@@ -391,6 +391,14 @@ impl<F: Flash> Session<F> {
                 return refuse(format!("this package is for the {}, the connected unit is a {}", pkg.model(), board.name));
             }
             let b = stored_bootloader(&pkg.flash).ok_or_else(|| Error::Refused("the package has no readable bootloader".into()))?;
+            // its boot area replaces the unit's, chip-key record included
+            let key = self.dev.chip_key();
+            let mut padded = pkg.flash.clone();
+            padded.resize(FLASH_SIZE, 0xFF);
+            if app_files_status(&padded, key) != AppStatus::Ok {
+                return refuse(format!("the package does not match this unit's chip key (0x{key:04X}): its boot area would not \
+                                       start the unit's firmware"));
+            }
             stock_area = Some(pkg.flash[..BOOT_AREA].to_vec());
             (b, format!("Put back the stock bootloader (from {})", pkg.identity))
         } else if let Some(b) = boot {
