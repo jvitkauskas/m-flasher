@@ -424,9 +424,9 @@ impl<F: Flash> Session<F> {
         let id = self.dev.flash_id();
         let mut warnings = vec![];
         if package.is_none() && !flash_tested(id) {
-            warnings.push(format!("This unit's flash chip (0x{id:06X}) has not been tested with this m-bootloader. One FM-1 with \
+            warnings.push(format!("This unit's flash chip (0x{id:06X}) has had little testing with m-bootloader. One FM-1 with \
                                    the newer chip 0xB36014 did not start after an older version was installed, and why is not known; \
-                                   another runs 1.3. Install it at your own risk."));
+                                   another runs 1.3 and 2.0. Install it at your own risk."));
         }
         if package.is_none() && full {
             let hz = config_sys_clk(&self.flash);

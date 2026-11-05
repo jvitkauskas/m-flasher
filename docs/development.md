@@ -97,9 +97,9 @@ their SVGs.
 FM-1s sold from late 2026 have a UCUN UC25HQ80 flash (`0xB36014`) in place of the
 Puya P25Q80H (`0x856014`). Owners report backups and restores with M-Flasher on
 it. One unit did not start after m-bootloader 1.1 or 1.2 was installed, and another
-runs 1.3 with its firmware, menu and download mode working
-([#13](https://github.com/jvitkauskas/m-flasher/issues/13)). Version 2.0 has not been
-tried on it.
+runs 1.3 and 2.0 with its firmware, menu and download mode working
+([#13](https://github.com/jvitkauskas/m-flasher/issues/13)). Its MIDI mode reinstalled
+the same firmware there, which rewrites only the first sector.
 
 m-bootloader 1.3 and flash loader 1.3, on an SMK-37 Pro from Linux: installing
 it, booting its firmware and stock 016, swapping with the older loader in both
