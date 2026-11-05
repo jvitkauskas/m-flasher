@@ -8,10 +8,6 @@ reviews:
     # Stacked PRs target other branches.
     base_branches:
       - ".*"
-  path_filters:
-    - "!assets/**"
-    - "!data/*.bin"
-    - "!data/*.boot"
   path_instructions:
     - path: "**"
       instructions: |
