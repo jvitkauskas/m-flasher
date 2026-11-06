@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M-Flasher for the web</title>
+<meta name="description" content="Back up, restore and install firmware on an M-VAVE FM-1 or SMK-37 from your browser, over USB MIDI.">
+<link rel="icon" href="assets/icon-256.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>M-Flasher <span>for the web</span></h1>
+  <p>Back up, restore and install firmware on an M-VAVE FM-1 or SMK-37, over USB MIDI, from a computer or a phone. Nothing leaves your device.</p>
+</header>
+<main>
+  <section id="test-notice">
+    <h2>Test version</h2>
+    <p>This page is being tested. It carries test builds, not a release. Save a backup first, and keep M-Flasher on a computer at hand.</p>
+  </section>
+  <section id="unsupported" hidden>
+    <h2>This browser can't reach MIDI devices</h2>
+    <p>Use Chrome, Edge, Brave or Firefox on a computer or Android. On iOS, use an app with Web MIDI, such as MIDIWeb. Safari doesn't support it.</p>
+  </section>
+
+  <section id="connect">
+    <h2>Connect the unit</h2>
+    <p id="hint">Plug it in directly with a USB data cable, and switch it on. Close M-UPGRADE, other editors and music apps first.</p>
+    <button id="connect-button" type="button">Connect</button>
+    <label id="port-row" hidden>Port <select id="port-select"></select></label>
+  </section>
+
+  <section id="unit" hidden>
+    <h2>This unit</h2>
+    <dl id="unit-facts"></dl>
+    <ul id="unit-notes"></ul>
+  </section>
+
+  <section id="actions" hidden>
+    <h2>What to do</h2>
+    <div id="action-list"></div>
+    <label id="wipe-row" hidden><input id="wipe" type="checkbox" checked> Also erase settings and Bluetooth pairings when installing firmware</label>
+    <input id="backup-file" type="file" accept=".bin" hidden>
+    <input id="firmware-file" type="file" accept=".fwsc" hidden>
+  </section>
+
+  <section id="progress" hidden aria-live="polite">
+    <h2 id="progress-title"></h2>
+    <progress id="progress-bar" max="100" value="0"></progress>
+    <p id="progress-text"></p>
+    <p id="keep-open"><strong>Keep this tab in front, and don't unplug the unit.</strong></p>
+  </section>
+
+  <p id="status" role="status"></p>
+
+  <details>
+    <summary>What this page can and can't do</summary>
+    <ul>
+      <li><strong>On a unit running normal firmware:</strong> it starts a small helper program through the firmware's own update route. That writes a few KiB to the area firmware keeps for updates, then the unit runs the helper from RAM. When you finish, or after 5 minutes without this page asking anything, it goes back to its firmware.</li>
+      <li><strong>With m-bootloader:</strong> hold PLAY (SEQ PLAY on the SMK-37) at power-on, choose MIDI MODE, and connect. That works with no firmware at all, and writes nothing until you ask.</li>
+      <li><strong>Backups</strong> are the whole flash, byte for byte, in the same format as M-Flasher on a computer, and checked with a CRC the chip computes. Keep them safe.</li>
+      <li><strong>Restoring</strong> covers firmware, settings and presets. The bootloader and key area are never written from here, nor the SMK-37's calibration and Bluetooth data.</li>
+      <li><strong>You still need M-Flasher on a computer</strong> for a unit that won't start and has no m-bootloader, for download mode, and to put the stock bootloader back. <a href="https://github.com/jvitkauskas/m-flasher">Get M-Flasher</a>.</li>
+    </ul>
+  </details>
+
+  <details id="log-box">
+    <summary>Details</summary>
+    <pre id="log"></pre>
+  </details>
+</main>
+
+<dialog id="confirm">
+  <form method="dialog">
+    <h2 id="confirm-title"></h2>
+    <pre id="confirm-text"></pre>
+    <ul id="confirm-warnings"></ul>
+    <label id="confirm-check-row"><input id="confirm-check" type="checkbox"> <span id="confirm-check-text"></span></label>
+    <menu>
+      <button id="confirm-cancel" value="cancel" type="submit">Cancel</button>
+      <button id="confirm-ok" value="ok" type="submit" class="danger"></button>
+    </menu>
+  </form>
+</dialog>
+<script type="module" src="app.js"></script>
+</body>
+</html>
