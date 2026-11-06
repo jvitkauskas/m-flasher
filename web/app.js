@@ -360,8 +360,9 @@ async function applyPlan(plan) {
     await state.unit.serveUpdate(image, {
       finish: FINISH.LOADER,
       onProgress: (done) => {
-        if (done < last - 0x1000) pass = 1;
-        last = done;
+        // The check reads to the end, in order, once; the write starts again from low addresses.
+        if (last >= image.length - 0x400 && done < last) pass = 1;
+        last = Math.max(done, pass ? 0 : last);
         progress(pass ? "Writing" : "The unit is checking the data", Math.min(done, image.length), image.length,
           pass ? "The unit's own bars are the ones to trust" : "Nothing is erased until this is done");
       },
