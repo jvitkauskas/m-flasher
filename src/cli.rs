@@ -33,9 +33,9 @@ the ROM takes USB down, so the jump can't be confirmed; that isn't an error.
 
   IMAGE         the program: a flat binary, linked for ADDR, whose first byte is
                 its entry (the ROM calls it the way it calls the flash loader)
-  --addr ADDR   hex (0x optional), within 0x01C20000..0x01C30000 (the flash
-                loader's two 32 KiB slots, the only RAM known to be safe); the
-                image must end before 0x01C30000. The uploaded program replaces
+  --addr ADDR   hex (0x optional), within 0x01C20000..0x01C7FD80 (the flash
+                loader's two 32 KiB slots and the app slot from 0x01C30000); the
+                image must end by 0x01C7FD80. The uploaded program replaces
                 a running M-Flasher loader that is in the same slot: refused
   --call OPCODE a 16-bit hex opcode (repeat for more): sends the 16-byte command
                 (opcode big endian, rest FF) and prints the 16-byte answer in hex,

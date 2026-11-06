@@ -56,10 +56,10 @@ pub const RESTART: [u8; 34] = [
     0xf7, 0x9f,
 ];
 
-/// The RAM `run-ram` may write: the flash loader's two 32 KiB slots, the only
-/// RAM known to be safe (m-bootloader's SPEC §1, §10).
+/// The RAM `run-ram` may write: the flash loader's two 32 KiB slots and the app
+/// slot above them, up to the retained area (m-bootloader's SPEC §2.1, §10).
 pub const RAM_START: u32 = 0x01C2_0000;
-pub const RAM_END: u32 = 0x01C3_0000;
+pub const RAM_END: u32 = 0x01C7_FD80;
 /// Bytes of one loader slot: a running loader must not be overwritten.
 const SLOT_SIZE: u32 = 0x8000;
 /// Bytes per `run-ram` read command.
@@ -71,7 +71,7 @@ pub const NOT_CALLABLE: [u16; 5] = [ERASE_BLOCK, ERASE_SECTOR, WRITE_FLASH, WRIT
 /// Whether `len` bytes at `addr` lie within the RAM `run-ram` may use.
 pub fn check_ram_range(addr: u32, len: usize) -> Result<(), String> {
     if !(RAM_START..RAM_END).contains(&addr) {
-        return Err(format!("address 0x{addr:08X} is outside 0x{RAM_START:08X}..0x{RAM_END:08X}, the only RAM known to be safe"));
+        return Err(format!("address 0x{addr:08X} is outside 0x{RAM_START:08X}..0x{RAM_END:08X}, the RAM tested for this"));
     }
     if len == 0 {
         return Err("the image is empty".into());
@@ -281,7 +281,9 @@ impl<S: Scsi> Connection<S> {
     fn upload(&mut self, addr: u32, blocks: &[Vec<u8>]) -> Result<(), ScsiError> {
         for (i, block) in blocks.iter().enumerate() {
             let a = addr + (i * 512) as u32;
-            self.dev.execute(&cdb(WRITE_MEMORY, &addr_len_crc(a, block)), Data::Out(block))?;
+            let c = cdb(WRITE_MEMORY, &addr_len_crc(a, block));
+            // Writing the same block again is harmless, and a full app slot is 640 commands.
+            self.retry(&format!("uploading to 0x{a:08X}"), |d| d.execute(&c, Data::Out(block)).map(|_| ()))?;
         }
         Ok(())
     }
