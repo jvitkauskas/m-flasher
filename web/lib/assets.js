@@ -13,7 +13,8 @@ let manifest = null;
 
 export async function loadManifest() {
   if (!manifest) {
-    const response = await fetch(new URL("../assets/manifest.json", import.meta.url));
+    // Hosts cache for minutes: a stale list could name packages from an older version.
+    const response = await fetch(new URL("../assets/manifest.json", import.meta.url), { cache: "no-cache" });
     if (!response.ok) throw new Error("this page is missing its manifest");
     manifest = await response.json();
   }
@@ -24,7 +25,7 @@ export async function loadPackage(kind, variant) {
   const m = await loadManifest();
   const file = m[kind]?.[variant];
   if (!file) throw new Error(`this page has no ${kind} for ${variant}`);
-  const response = await fetch(new URL(`../assets/${file}`, import.meta.url));
+  const response = await fetch(new URL(`../assets/${file}`, import.meta.url), { cache: "no-cache" });
   if (!response.ok) throw new Error(`this page is missing ${file}`);
   return parsePackage(new Uint8Array(await response.arrayBuffer()));
 }
