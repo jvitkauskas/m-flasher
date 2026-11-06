@@ -167,7 +167,8 @@ m-flasher run-ram prog.bin --addr 0x01C28000 --call FC60 --call FC61 \
   the flash loader's two 32 KiB slots, the only RAM known to be safe; the
   image must end before `0x01C30000`, so it can be up to 64 KiB at
   `0x01C20000`. It is refused otherwise, and also when it would overwrite an
-  M-Flasher loader that is running (use the other slot).
+  M-Flasher loader that is running: use the other slot, or for an image over 32
+  KiB, switch the unit off and on in download mode first.
 - `--call OPCODE` (16-bit hex, repeatable) sends the 16-byte command (the
   opcode, then `FF`s) and prints the program's 16-byte answer in hex; the
   program is expected to echo the opcode in the first two bytes. Flash erase
