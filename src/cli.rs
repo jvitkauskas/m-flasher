@@ -11,7 +11,7 @@
 
 use crate::jl::Connection;
 use crate::ops::{Error, Plan, Session, board_from_key};
-use crate::scsi::{Device, find_devices};
+use crate::scsi::{Device, ScsiError, find_devices};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -28,7 +28,8 @@ const RUN_RAM_HELP: &str = "usage: m-flasher run-ram IMAGE --addr ADDR [--call O
 Runs your own program in the unit's RAM, through the chip's download mode, and
 talks to it. It does not start M-Flasher's flash loader and does not touch the
 flash; it works the same when the loader is already running. The program runs
-until the unit is switched off and on again.
+until the unit is switched off and on again. A program that doesn't return to
+the ROM takes USB down, so the jump can't be confirmed; that isn't an error.
 
   IMAGE         the program: a flat binary, linked for ADDR, whose first byte is
                 its entry (the ROM calls it the way it calls the flash loader)
@@ -231,7 +232,13 @@ impl RamJob {
 
     pub(crate) fn run<S: crate::scsi::Scsi>(&self, c: &mut Connection<S>, log: &mut dyn FnMut(String)) -> Result<(), Error> {
         log(format!("Uploading {} bytes to 0x{:08X} and starting them", self.image.len(), self.addr));
-        c.run_ram(self.addr, &self.image)?;
+        if !c.run_ram(self.addr, &self.image)? {
+            if !self.calls.is_empty() || self.read.is_some() {
+                return Err(Error::Usb(ScsiError::Failed("the jump to the program got no answer, so --call and --read can't be sent".into())));
+            }
+            log("The jump got no answer, as with a program that doesn't return to the ROM, so it can't be confirmed from here: go by what the unit does".into());
+            return Ok(());
+        }
         for &op in &self.calls {
             let r = c.call_program(op)?;
             log(format!("0x{op:04X}: {}", r.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")));

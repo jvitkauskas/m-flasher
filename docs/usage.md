@@ -183,9 +183,9 @@ m-flasher run-ram prog.bin --addr 0x01C28000 --call FC60 --call FC61 \
 A program doesn't have to go back to the ROM. It can move to its own stack as
 soon as it starts, turn off interrupts and the watchdog, and never return,
 which is how m-bootloader's RAM stage runs. The ROM's USB service stops then,
-so `--call` and `--read` can't be used with such a program. M-Flasher still
-waits for the ROM's answer to the jump, which may not arrive, so go by what the
-unit does rather than by the command's result.
+before it answers the jump, so M-Flasher says it can't confirm the start and
+exits with success: go by what the unit does. `--call` and `--read` can't be
+used with such a program, and asking for them gives an error.
 
 This **runs arbitrary code on the chip**: only run programs you trust and
 understand. It does not write to the flash itself, but a program of yours can

@@ -278,11 +278,16 @@ impl<S: Scsi> Connection<S> {
         String::from_utf8_lossy(&img[at + 4..at + 7]).to_string()
     }
 
-    fn upload_and_jump(&mut self, addr: u32, blocks: &[Vec<u8>]) -> Result<(), ScsiError> {
+    fn upload(&mut self, addr: u32, blocks: &[Vec<u8>]) -> Result<(), ScsiError> {
         for (i, block) in blocks.iter().enumerate() {
             let a = addr + (i * 512) as u32;
             self.dev.execute(&cdb(WRITE_MEMORY, &addr_len_crc(a, block)), Data::Out(block))?;
         }
+        Ok(())
+    }
+
+    fn upload_and_jump(&mut self, addr: u32, blocks: &[Vec<u8>]) -> Result<(), ScsiError> {
+        self.upload(addr, blocks)?;
         let mut args = addr.to_be_bytes().to_vec();
         args.extend(LOADER_ARG.to_be_bytes());
         self.call(JUMP, &args)?;
@@ -337,7 +342,10 @@ impl<S: Scsi> Connection<S> {
     /// `run-ram`: uploads `image` to RAM at `addr` the way the loader is
     /// uploaded (512-byte blocks, each scrambled for the ROM) and jumps to it.
     /// The program stays in RAM until the unit is switched off.
-    pub fn run_ram(&mut self, addr: u32, image: &[u8]) -> Result<(), ScsiError> {
+    /// Returns whether the jump was answered. A program that doesn't return to
+    /// the ROM takes USB down before the answer, so only the upload's errors are
+    /// errors, and the jump is not sent again.
+    pub fn run_ram(&mut self, addr: u32, image: &[u8]) -> Result<bool, ScsiError> {
         check_ram_range(addr, image.len()).map_err(ScsiError::Failed)?;
         // A running loader of ours is answering the commands (including the
         // ROM's own, which it passes on): overwriting it would hang the unit.
@@ -351,7 +359,18 @@ impl<S: Scsi> Connection<S> {
             }
         }
         let scrambled: Vec<Vec<u8>> = image.chunks(512).map(|b| crc_cipher(b, 0xFFFF_FFFF)).collect();
-        self.upload_and_jump(addr, &scrambled)
+        self.upload(addr, &scrambled)?;
+        let mut args = addr.to_be_bytes().to_vec();
+        args.extend(LOADER_ARG.to_be_bytes());
+        let mut resp = [0u8; 16];
+        if self.dev.execute(&cdb(JUMP, &args), Data::In(&mut resp)).is_err() {
+            return Ok(false);
+        }
+        if u16::from_be_bytes([resp[0], resp[1]]) != JUMP {
+            return Err(ScsiError::Failed(format!("unexpected answer to command 0x{JUMP:04x}")));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        Ok(true)
     }
 
     /// `restart`: leaves download mode. Uploads RESTART to the slot a running
