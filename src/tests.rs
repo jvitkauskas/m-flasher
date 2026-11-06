@@ -358,6 +358,17 @@ fn installing_m_bootloader_warns_about_an_untested_flash_chip() {
 }
 
 /// `boot` with its version text replaced, its checksums made good again.
+/// A bootloader of the size older versions were, which ends before stock's
+/// configuration. The bundled one has outgrown that: 2.x moves the configuration.
+fn older_size(boot: &[u8]) -> Vec<u8> {
+    let offset = u32::from_le_bytes(boot[8..12].try_into().unwrap()) as usize;
+    const SIZE: usize = 0x3000;
+    assert!(BOOT_AT + offset + SIZE <= 0x3938);
+    let mut b = boot[..offset + SIZE].to_vec();
+    b[2..4].copy_from_slice(&(SIZE as u16).to_le_bytes());
+    with_version(&b, "older")
+}
+
 fn with_version(boot: &[u8], version: &str) -> Vec<u8> {
     let mut b = boot.to_vec();
     let offset = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
@@ -377,8 +388,9 @@ fn an_older_bootloader_warns_on_fm1_016s_configuration() {
     assert!(!crate::formats::reads_config(boot), "the bundled build reads no configuration: {version}");
     assert!(!crate::formats::reads_config(&with_version(boot, "2.0-abc1234")), "newer majors read none either");
     assert!(crate::formats::reads_config(&with_version(boot, "1.3-6c321e9")));
+    let older = older_size(boot);
     let flash_with = |hz: u32| {
-        let mut flash = with_boot_area(fm1_016_image(), boot);
+        let mut flash = with_boot_area(fm1_016_image(), &older);
         flash[0x3938 + 40..0x3938 + 48].copy_from_slice(b"SYS_CLK\0");
         flash[0x3938 + 48..0x3938 + 52].copy_from_slice(&hz.to_le_bytes());
         flash
@@ -389,12 +401,12 @@ fn an_older_bootloader_warns_on_fm1_016s_configuration() {
         f.id = FM1.flash_id;
         session_with(f).plan_bootloader(b, None).unwrap().warnings.iter().any(|w| w.contains("BAD CONFIG"))
     };
-    let old = with_version(boot, "1.2-22e2559");
+    let old = with_version(&older, "1.2-22e2559");
     assert!(warned(320_000_000, Some(&old)));
-    assert!(warned(320_000_000, Some(&with_version(boot, "abc1234"))), "the earlier bootloader's bare hashes");
+    assert!(warned(320_000_000, Some(&with_version(&older, "abc1234"))), "the earlier bootloader's bare hashes");
     assert!(!warned(360_000_000, Some(&old)), "015's configuration is fine");
-    assert!(!warned(320_000_000, Some(&with_version(boot, "1.3-6c321e9"))), "1.3 takes 320 MHz");
-    assert!(!warned(320_000_000, Some(&with_version(boot, "1.4-ac26c70"))));
+    assert!(!warned(320_000_000, Some(&with_version(&older, "1.3-6c321e9"))), "1.3 takes 320 MHz");
+    assert!(!warned(320_000_000, Some(&with_version(&older, "1.4-ac26c70"))));
     assert!(!warned(320_000_000, Some(&with_version(boot, "2.0-abc1234"))));
     assert!(!warned(320_000_000, Some(boot)));
     assert!(!warned(320_000_000, None), "the bundled build");
@@ -408,7 +420,8 @@ fn fm1_on(flash: Vec<u8>) -> Session<FakeFlash> {
 #[test]
 fn installing_m_bootloader_cuts_the_configuration_short() {
     let (boot, _) = bundled_bootloader(&FM1).unwrap();
-    let old = with_version(boot, "1.3-6c321e9");
+    let older = older_size(boot);
+    let old = with_version(&older, "1.3-6c321e9");
     let flash = with_boot_area(fm1_016_image(), &old);
     let key = flash[0x3938..0x3938 + CONFIG_KEY].to_vec();
     let mut s = fm1_on(flash.clone());
@@ -425,7 +438,7 @@ fn installing_m_bootloader_cuts_the_configuration_short() {
     assert!(s.plan_bootloader(None, None).unwrap().sectors.is_empty());
     // an older bootloader over it: its settings are there, so no warning
     for v in ["1.3-6c321e9", "1.2-22e2559"] {
-        let p = s.plan_bootloader(Some(&with_version(boot, v)), None).unwrap();
+        let p = s.plan_bootloader(Some(&with_version(&older, v)), None).unwrap();
         assert!(!p.warnings.iter().any(|w| w.contains("BAD CONFIG")), "{v}: {:?}", p.warnings);
         assert_eq!(boot_table(&p.target)[1].addr as usize, CONFIG_AT, "it can only keep what is there");
     }
@@ -444,7 +457,7 @@ fn installing_m_bootloader_cuts_the_configuration_short() {
 fn the_stock_bootloader_comes_with_the_packages_whole_boot_area() {
     let (boot, _) = bundled_bootloader(&FM1).unwrap();
     // a stock bootloader: no identity; a package with its own full configuration
-    let stock = with_version(boot, "x");
+    let stock = with_version(&older_size(boot), "x");
     let stock: Vec<u8> = {
         let mut b = stock;
         let offset = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
