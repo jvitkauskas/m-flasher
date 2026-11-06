@@ -817,8 +817,8 @@ pub struct MockRom {
     pub flash_id: u32,
     /// The program never returns to the ROM: USB is gone before FB08's answer.
     pub lose_jump: bool,
-    /// FB06 fails.
-    pub fail_uploads: bool,
+    /// This many FB06 commands fail.
+    pub fail_uploads: usize,
 }
 
 /// The version in the bundled loader.
@@ -842,7 +842,8 @@ impl Scsi for MockRom {
         match data {
             Data::Out(d) => {
                 self.log.push((cdb.to_vec(), d.to_vec()));
-                if self.fail_uploads {
+                if self.fail_uploads > 0 {
+                    self.fail_uploads -= 1;
                     return Err(ScsiError::Failed("transfer failed".into()));
                 }
                 Ok(d.len())
@@ -1019,9 +1020,18 @@ fn run_ram_calls_need_the_jump_answered() {
 
 #[test]
 fn run_ram_upload_errors_are_still_errors() {
-    let mut c = ram_unit(MockRom { fail_uploads: true, ..Default::default() });
+    let mut c = ram_unit(MockRom { fail_uploads: usize::MAX, ..Default::default() });
     assert!(c.run_ram(0x01C2_8000, &[1; 16]).is_err());
     assert!(!sent(&c).iter().any(|(cdb, _)| cdb[..2] == [0xFB, 0x08]), "no jump after a failed upload");
+}
+
+#[test]
+fn run_ram_upload_sends_a_failed_block_again() {
+    let mut c = ram_unit(MockRom { fail_uploads: 1, ..Default::default() });
+    c.run_ram(0x01C2_8000, &[1; 16]).unwrap();
+    let ops: Vec<[u8; 2]> = sent(&c).iter().map(|(cdb, _)| [cdb[0], cdb[1]]).collect();
+    assert_eq!(ops, vec![[0xFB, 6], [0xFB, 6], [0xFB, 8]]);
+    assert_eq!(sent(&c)[0], sent(&c)[1]);
 }
 
 #[test]
@@ -1040,11 +1050,13 @@ fn run_ram_upload_is_the_loaders_upload() {
 fn run_ram_address_checks() {
     use crate::jl::check_ram_range;
     assert!(check_ram_range(0x01C2_0000, 1).is_ok());
-    assert!(check_ram_range(0x01C2_0000, 0x10000).is_ok(), "exactly fills it");
-    assert!(check_ram_range(0x01C2_0000, 0x10001).is_err());
-    assert!(check_ram_range(0x01C2_FFFF, 1).is_ok());
-    assert!(check_ram_range(0x01C2_FFFF, 2).is_err());
-    assert!(check_ram_range(0x01C3_0000, 1).is_err(), "the end is outside");
+    assert!(check_ram_range(0x01C2_0000, 0x5FD80).is_ok(), "exactly fills it");
+    assert!(check_ram_range(0x01C2_0000, 0x5FD81).is_err());
+    assert!(check_ram_range(0x01C3_0000, 0x4FD80).is_ok(), "exactly fills the app slot");
+    assert!(check_ram_range(0x01C3_0000, 0x4FD81).is_err());
+    assert!(check_ram_range(0x01C7_FD7F, 1).is_ok());
+    assert!(check_ram_range(0x01C7_FD7F, 2).is_err());
+    assert!(check_ram_range(0x01C7_FD80, 1).is_err(), "the retained area is outside");
     assert!(check_ram_range(0x01C1_FFFF, 1).is_err());
     assert!(check_ram_range(0, 1).is_err());
     assert!(check_ram_range(0xFFFF_FFFF, 1).is_err());
@@ -1052,14 +1064,16 @@ fn run_ram_address_checks() {
     // run_ram refuses before sending anything
     let mut c = ram_unit(MockRom::default());
     assert!(c.run_ram(0x01C1_0000, &[1; 16]).is_err());
-    assert!(c.run_ram(0x01C2_FF00, &[1; 257]).is_err());
+    assert!(c.run_ram(0x01C7_FF00, &[1; 16]).is_err());
+    assert!(c.run_ram(0x01C7_FC00, &[1; 0x181]).is_err());
     assert!(c.device().log.is_empty());
     // the command line says so before it connects
     let job = |addr: Option<&str>, len: usize| RamJob::new(&vec![0; len], addr, &[], None, None).map(|_| ());
     assert!(job(Some("0x01C28000"), 100).is_ok());
     assert!(job(Some("1c28000"), 100).is_ok());
-    assert!(matches!(job(Some("0x01C30000"), 1), Err(Error::Refused(_))));
-    assert!(matches!(job(Some("0x01C2F000"), 0x1001), Err(Error::Refused(_))));
+    assert!(job(Some("0x01C30000"), 0x4FD80).is_ok());
+    assert!(matches!(job(Some("0x01C30000"), 0x4FD81), Err(Error::Refused(_))));
+    assert!(matches!(job(Some("0x01C7FD80"), 1), Err(Error::Refused(_))));
     assert!(matches!(job(Some("0x01C00000"), 1), Err(Error::Refused(_))));
     assert!(matches!(job(Some("zz"), 1), Err(Error::Refused(_))));
     assert!(matches!(job(None, 1), Err(Error::Refused(_))));

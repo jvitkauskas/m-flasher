@@ -163,10 +163,10 @@ m-flasher run-ram prog.bin --addr 0x01C28000 --call FC60 --call FC61 \
 
 - `IMAGE` is a flat binary linked for `--addr`, with its entry at the first
   byte, built like the flash loader (m-bootloader's `docs/SPEC.md` §10 gives
-  the contract). `--addr` is hex and must be in `0x01C20000` to `0x01C2FFFF`,
-  the flash loader's two 32 KiB slots, the only RAM known to be safe; the
-  image must end before `0x01C30000`, so it can be up to 64 KiB at
-  `0x01C20000`. It is refused otherwise, and also when it would overwrite an
+  the contract). `--addr` is hex and must be from `0x01C20000` to below
+  `0x01C7FD80`: the flash loader's two 32 KiB slots, then the app slot from
+  `0x01C30000`. The image must end by `0x01C7FD80`, where the retained area
+  starts. It is refused otherwise, and also when it would overwrite an
   M-Flasher loader that is running: use the other slot, or for an image over 32
   KiB, switch the unit off and on in download mode first.
 - `--call OPCODE` (16-bit hex, repeatable) sends the 16-byte command (the
