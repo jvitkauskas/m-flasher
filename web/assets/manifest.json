@@ -1,5 +1,5 @@
 {
-  "bootloaderVersion": "2.2-ddcc822",
+  "bootloaderVersion": "2.2-b5e90f0",
   "stage": {
     "fm1": "stage-fm1.fwsc",
     "smk37-pro": "stage-smk37-pro.fwsc",
