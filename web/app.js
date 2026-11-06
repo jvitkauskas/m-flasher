@@ -7,7 +7,10 @@ import { loadManifest, loadPackage, variantOf } from "./lib/assets.js";
 
 const TOOL = "m-flasher web 0.1";
 /** Firmware whose update route has run the helper on real hardware. */
-const ROUTE_TESTED = new Set(["FM-1_015", "FM-1_016"]);
+const ROUTE_TESTED = new Set(["FM-1_015", "FM-1_016", "FM-1_102", "FM-1_918"]);
+/** Firmware whose update route has refused it: SLOOP, ChoralRoot and Melodee, as tested. Their own checks say no. */
+const ROUTE_REFUSED = new Set(["FM-1_900", "FM-1_920", "FM-1_91061"]);
+const OTHER_WAYS = "With m-bootloader installed, hold PLAY at power-on and choose MIDI MODE. Otherwise, use M-Flasher on a computer.";
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -253,7 +256,11 @@ function report(cause) {
 async function startTools() {
   const variant = variantOf(state.model);
   if (!variant) {
-    status(`This page doesn't know the firmware "${state.identity}", so it can't start the helper on it.`, "error");
+    status(`This page doesn't know the firmware "${state.identity}", so it can't start the helper on it. ${OTHER_WAYS}`, "error");
+    return;
+  }
+  if (ROUTE_REFUSED.has(state.identity)) {
+    status(`This firmware (${state.identity}) doesn't accept the helper. Nothing was changed. ${OTHER_WAYS}`, "error");
     return;
   }
   const warnings = [];
@@ -269,10 +276,17 @@ async function startTools() {
   await run(async () => {
     const pkg = await loadPackage("stage", variant);
     log(`Helper package ${pkg.identity}, ${pkg.image.length} bytes`);
-    await state.unit.serveUpdate(pkg.image, {
-      finish: FINISH.APP,
-      onProgress: (done) => progress("Sending the helper", Math.min(done, pkg.image.length), pkg.image.length),
-    });
+    try {
+      await state.unit.serveUpdate(pkg.image, {
+        finish: FINISH.APP,
+        idleMs: 15000,
+        onProgress: (done) => progress("Sending the helper", Math.min(done, pkg.image.length), pkg.image.length),
+      });
+    } catch (cause) {
+      if (!(cause instanceof UnitLost)) throw cause;
+      log(`Helper: ${cause.message}`);
+      throw new Error(`This firmware didn't accept the helper, and it keeps running. ${OTHER_WAYS}`);
+    }
     progress("Waiting for the helper to start", 1, 1, "The unit is restarting");
     const port = await reconnect(45, (identity, info) => info?.kind === "stage");
     if (!port) throw new UnitLost("the helper didn't appear within 45 s");

@@ -7,6 +7,15 @@ on:
   pull_request:
 
 jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - run: node --test web/test/*.test.mjs
+
   linux:
     # built on 22.04: the binaries run on glibc 2.35 and newer
     strategy:
