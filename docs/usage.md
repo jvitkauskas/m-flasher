@@ -165,8 +165,10 @@ m-flasher run-ram prog.bin --addr 0x01C28000 --call FC60 --call FC61 \
   byte, built like the flash loader (m-bootloader's `docs/SPEC.md` §10 gives
   the contract). `--addr` is hex and must be in `0x01C20000` to `0x01C2FFFF`,
   the flash loader's two 32 KiB slots, the only RAM known to be safe; the
-  image must end before `0x01C30000`. It is refused otherwise, and also when it
-  would overwrite an M-Flasher loader that is running (use the other slot).
+  image must end before `0x01C30000`, so it can be up to 64 KiB at
+  `0x01C20000`. It is refused otherwise, and also when it would overwrite an
+  M-Flasher loader that is running: use the other slot, or for an image over 32
+  KiB, switch the unit off and on in download mode first.
 - `--call OPCODE` (16-bit hex, repeatable) sends the 16-byte command (the
   opcode, then `FF`s) and prints the program's 16-byte answer in hex; the
   program is expected to echo the opcode in the first two bytes. Flash erase
@@ -178,6 +180,13 @@ m-flasher run-ram prog.bin --addr 0x01C28000 --call FC60 --call FC61 \
   The program has to implement `FD61`, sending the bytes with the ROM's send
   callback.
 - `--device PATH` as for the other commands.
+
+A program doesn't have to go back to the ROM. It can move to its own stack as
+soon as it starts, turn off interrupts and the watchdog, and never return,
+which is how m-bootloader's RAM stage runs. The ROM's USB service stops then,
+before it answers the jump, so M-Flasher says it can't confirm the start and
+exits with success: go by what the unit does. `--call` and `--read` can't be
+used with such a program, and asking for them gives an error.
 
 This **runs arbitrary code on the chip**: only run programs you trust and
 understand. It does not write to the flash itself, but a program of yours can

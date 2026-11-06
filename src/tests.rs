@@ -815,6 +815,10 @@ pub struct MockRom {
     pub last_error: u8,
     /// What the flash chip answers now (FC0A).
     pub flash_id: u32,
+    /// The program never returns to the ROM: USB is gone before FB08's answer.
+    pub lose_jump: bool,
+    /// FB06 fails.
+    pub fail_uploads: bool,
 }
 
 /// The version in the bundled loader.
@@ -838,11 +842,17 @@ impl Scsi for MockRom {
         match data {
             Data::Out(d) => {
                 self.log.push((cdb.to_vec(), d.to_vec()));
+                if self.fail_uploads {
+                    return Err(ScsiError::Failed("transfer failed".into()));
+                }
                 Ok(d.len())
             }
             Data::None => unreachable!(),
             Data::In(b) => {
                 self.log.push((cdb.to_vec(), vec![]));
+                if op == 0xFB08 && self.lose_jump {
+                    return Err(ScsiError::Failed("No such device".into()));
+                }
                 if op == 0xFD61 {
                     if self.fail_reads > 0 {
                         self.fail_reads -= 1;
@@ -985,6 +995,33 @@ fn run_ram_uploads_like_the_loader_and_jumps() {
     assert_eq!(cmds[2].1.len(), 276);
     // FB08: entry address, target argument 1, a 16-byte answer
     assert_eq!(cmds[3].0, cdb16(&[0xFB, 0x08, 0x01, 0xC2, 0x80, 0x00, 0x00, 0x01]));
+}
+
+#[test]
+fn run_ram_program_that_never_returns_is_not_a_failure() {
+    let job = RamJob::new(&[0xAA; 600], Some("0x01C28000"), &[], None, None).unwrap();
+    let mut c = ram_unit(MockRom { lose_jump: true, ..Default::default() });
+    let mut log = vec![];
+    job.run(&mut c, &mut |s| log.push(s)).unwrap();
+    let ops: Vec<[u8; 2]> = sent(&c).iter().map(|(cdb, _)| [cdb[0], cdb[1]]).collect();
+    assert_eq!(ops, vec![[0xFB, 6], [0xFB, 6], [0xFB, 8]], "the jump goes once");
+    assert!(log.iter().any(|l| l.contains("can't be confirmed")), "{log:?}");
+    assert!(!log.iter().any(|l| l.contains("still running")), "{log:?}");
+}
+
+#[test]
+fn run_ram_calls_need_the_jump_answered() {
+    let job = RamJob::new(&[0xAA; 16], Some("0x01C28000"), &["FC60".into()], None, None).unwrap();
+    let mut c = ram_unit(MockRom { lose_jump: true, ..Default::default() });
+    assert!(job.run(&mut c, &mut |_| {}).is_err());
+    assert!(!sent(&c).iter().any(|(cdb, _)| cdb[0] == 0xFC), "the call is not sent");
+}
+
+#[test]
+fn run_ram_upload_errors_are_still_errors() {
+    let mut c = ram_unit(MockRom { fail_uploads: true, ..Default::default() });
+    assert!(c.run_ram(0x01C2_8000, &[1; 16]).is_err());
+    assert!(!sent(&c).iter().any(|(cdb, _)| cdb[..2] == [0xFB, 0x08]), "no jump after a failed upload");
 }
 
 #[test]
