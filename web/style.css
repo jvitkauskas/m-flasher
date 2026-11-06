@@ -1,0 +1,38 @@
+/* SPDX-License-Identifier: MIT */
+:root { color-scheme: dark; --bg: #16181d; --panel: #20242b; --line: #343a44; --text: #e8ebf0; --dim: #a5adba; --accent: #7fe0b5; --warn: #ffb648; --bad: #ff7a70; }
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 46rem; padding: 1.25rem; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+h1 { margin: 0; font-size: 1.8rem; letter-spacing: -0.01em; }
+h1 span { color: var(--accent); font-weight: 400; }
+h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+header p { margin: 0.3rem 0 1rem; color: var(--dim); }
+section, details { margin: 0 0 0.9rem; padding: 0.9rem 1rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+summary { cursor: pointer; color: var(--dim); }
+p { margin: 0 0 0.6rem; }
+button { min-height: 2.6rem; padding: 0.4rem 1rem; margin: 0 0.5rem 0.5rem 0; color: #10131a; background: var(--accent); border: 0; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
+button.quiet { color: var(--text); background: #39404b; }
+button.danger { color: #1c0f06; background: var(--warn); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.action { margin-bottom: 0.7rem; }
+.action p { margin: 0 0 0.3rem; color: var(--dim); font-size: 0.92rem; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 1rem; margin: 0; }
+dt { color: var(--dim); }
+dd { margin: 0; overflow-wrap: anywhere; }
+ul { margin: 0.5rem 0 0; padding-left: 1.2rem; }
+#unit-notes:empty, #confirm-warnings:empty { display: none; }
+#unit-notes li, #confirm-warnings li { color: var(--warn); }
+progress { width: 100%; height: 1rem; accent-color: var(--accent); }
+#status { min-height: 1.5rem; }
+#status.error { color: var(--bad); }
+#status.done { color: var(--accent); }
+#log { max-height: 16rem; margin: 0.5rem 0 0; overflow: auto; color: var(--dim); font-size: 0.82rem; white-space: pre-wrap; }
+dialog { max-width: min(38rem, 94vw); padding: 1.1rem; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+dialog pre { margin: 0; color: var(--text); font: inherit; white-space: pre-wrap; }
+dialog label { display: block; margin-top: 0.7rem; }
+menu { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; margin: 1rem 0 0; padding: 0; }
+menu button { margin: 0; }
+#confirm-cancel { color: var(--text); background: #39404b; }
+select { min-height: 2.2rem; color: var(--text); background: #39404b; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+a { color: var(--accent); }

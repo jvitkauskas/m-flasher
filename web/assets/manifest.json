@@ -1,0 +1,13 @@
+{
+  "bootloaderVersion": "2.2-3c8611f",
+  "stage": {
+    "fm1": "stage-fm1.fwsc",
+    "smk37-pro": "stage-smk37-pro.fwsc",
+    "smk37-elite": "stage-smk37-elite.fwsc"
+  },
+  "bootloader": {
+    "fm1": "m-bootloader-fm1.fwsc",
+    "smk37-pro": "m-bootloader-smk37-pro.fwsc",
+    "smk37-elite": "m-bootloader-smk37-elite.fwsc"
+  }
+}
