@@ -3,12 +3,12 @@
 import { BOOT_AREA, appFilesStatus, crc32, hex, packageImage, sha256Hex } from "./lib/formats.js";
 import { FINISH, Link, Unit, UnitLost, findPorts } from "./lib/protocol.js";
 import { analyse, describePlan, flashTested, planFirmware, planRestore } from "./lib/unit.js";
-import { loadManifest, loadPackage, variantOf } from "./lib/assets.js";
+import { loadManifest, loadPackage, hasOwnUpdater, variantOf } from "./lib/assets.js";
 
 const TOOL = "m-flasher web 0.1";
 /** Firmware whose update route has run the helper on real hardware. */
-const ROUTE_TESTED = new Set(["FM-1_015", "FM-1_016", "FM-1_102", "FM-1_918", "FM-1_900", "FM-1_920", "FM-1_91061"]);
-const OTHER_WAYS = "With m-bootloader installed, hold PLAY at power-on and choose MIDI MODE. Otherwise, use M-Flasher on a computer.";
+const ROUTE_TESTED = new Set(["FM-1_015", "FM-1_016", "FM-1_102", "FM-1_918", "FM-1_900", "FM-1_920", "FM-1_91061", "SMK-37 Pro_016", "SMK-37+VA_102", "SMK-37 Pro_920", "SMK-37 Elite_016"]);
+const OTHER_WAYS = "With m-bootloader installed, hold PLAY (SEQ PLAY on the SMK-37) at power-on and choose MIDI MODE. Otherwise, use M-Flasher on a computer.";
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -35,6 +35,9 @@ function status(text, kind = "") {
   $("status").className = kind;
   if (text) log(text);
 }
+
+/** A finished install's message, which stays when the unit restarts and reappears. */
+const finished = () => $("status").className === "done";
 
 function progress(title, done, total, text = "") {
   $("progress").hidden = false;
@@ -80,7 +83,7 @@ async function scan() {
   select.replaceChildren(...ports.map((p, i) => new Option(p.name, i)));
   $("port-row").hidden = ports.length < 2;
   if (!ports.length) {
-    status("No unit found. Is it on, and plugged in with a data cable?");
+    if (!finished()) status("No unit found. Is it on, and plugged in with a data cable?");
     render();
     return;
   }
@@ -104,7 +107,8 @@ async function open(port) {
     state.model = name;
     if (state.info) state.mode = state.info.kind;
     else state.mode = state.identity.startsWith("ota-") ? "loader" : "firmware";
-    status("");
+    // The unit reappears after an install: what the install said should outlast that.
+    if (!finished()) status("");
     if (state.info) await readFlash();
   } catch (cause) {
     report(cause);
@@ -219,6 +223,7 @@ function confirmWrite({ title, text, warnings = [], okLabel, check }) {
 // ---- doing ----
 
 async function run(what) {
+  status("");
   state.busy = true;
   render();
   let lock = null;
@@ -327,7 +332,7 @@ async function installBootloader() {
     progress("Installing", 1, 1, "The unit is writing its bootloader, and restarting");
     const port = await reconnect(60);
     if (port) await rejoin(port);
-    status(`m-bootloader was sent. Hold PLAY at power-on to see its version (${manifest.bootloaderVersion}).`, "done");
+    status(`m-bootloader was sent. Hold PLAY (SEQ PLAY on the SMK-37) at power-on to see its version (${manifest.bootloaderVersion}).`, "done");
   });
 }
 
@@ -476,7 +481,11 @@ function render() {
   $("wipe-row").hidden = !state.flash;
   const facts = [];
   const notes = [];
-  if (state.mode === "firmware") {
+  if (hasOwnUpdater(state.identity)) {
+    fact(facts, "Running", `${state.mode === "loader" ? "its updater" : "firmware"} ${state.identity}`);
+    notes.push("This firmware only updates from its own kind of package, so this page can't start the tools on it. Your firmware is unchanged. Use M-Flasher on a computer, or m-bootloader 2.2's MIDI MODE (hold SEQ PLAY at power-on).");
+    if (state.mode === "loader") notes.push("It's in its updater now. To leave, switch it off and on.");
+  } else if (state.mode === "firmware") {
     fact(facts, "Running", `firmware ${state.identity}`);
     notes.push("A browser can't read the flash through this firmware. Start the tools to back up, restore or install firmware.");
   } else if (state.mode === "loader") {
@@ -503,7 +512,9 @@ function render() {
     return li;
   }));
   const list = [];
-  if (state.mode === "firmware") {
+  if (hasOwnUpdater(state.identity)) {
+    list.push(action("Switch to download mode", "For M-Flasher on a computer. A browser can't use this mode.", () => leave("downloadMode", "Asked for download mode. Open M-Flasher on a computer.")));
+  } else if (state.mode === "firmware") {
     list.push(action("Start the tools", "Back up, restore, or install firmware. Your firmware stays, and the unit goes back to it afterwards.", startTools));
     list.push(action("Install m-bootloader", "Adds hold-REC download mode, a recovery menu, and MIDI mode for when firmware won't start.", installBootloader, "quiet"));
     list.push(action("Switch to download mode", "For M-Flasher on a computer. A browser can't use this mode.", () => leave("downloadMode", "Asked for download mode. Open M-Flasher on a computer."), "quiet"));
@@ -524,7 +535,10 @@ function render() {
   document.body.dataset.busy = String(state.busy);
 }
 
-$("connect-button").onclick = () => (state.access ? scan() : connect());
+$("connect-button").onclick = () => {
+  status("");
+  return state.access ? scan() : connect();
+};
 $("port-select").onchange = async () => {
   closeLink();
   const ports = findPorts(state.access);

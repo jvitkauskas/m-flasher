@@ -26,4 +26,6 @@ Both answer the commands in [m-bootloader's specification](https://github.com/jv
 
 ## Tested
 
-See the pull request for the record. In short, on an FM-1, in Chromium through Web MIDI, every result compared byte for byte with M-Flasher on a computer. The stage runs on stock 015 and 016, Baud Girl, Felucca, SLOOP 2.8.5, ChoralRoot and Melodee.
+See the pull request for the record. In short, on an FM-1 and an SMK-37 Pro, in Chromium through Web MIDI, every result compared byte for byte with M-Flasher on a computer. On the FM-1, the stage runs on stock 015 and 016, Baud Girl, Felucca, SLOOP 2.8.5, ChoralRoot and Melodee. On the SMK-37, it runs on stock Pro 016, Elite 016 (cross-flashed to a Pro), Baud Girl and ChoralRoot.
+
+It can't start on ChanceTheMaker's SMK firmware (`SMK-37_9NN`), whose updater only takes its own packages, nor on the older `SMK-37 Pro_900`. There, use MIDI mode or M-Flasher.

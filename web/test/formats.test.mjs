@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import * as f from "../lib/formats.js";
+import { hasOwnUpdater, variantOf } from "../lib/assets.js";
 import { CHIP_KEY, FM1, SMK37, analyse, planFirmware, planRestore } from "../lib/unit.js";
 
 const DATA = process.env.FLASHER_TEST_DATA ?? "";
@@ -95,4 +96,10 @@ test("wiping settings erases the regions the package declares", { skip: !need("f
   assert.equal(plan.target[0xe9000], 0xff);
   assert.equal(plan.target[0xff000], 0x77);
   assert.equal(plan.target[0], 0x77);
+});
+
+test("only firmware with its own updater is kept from the update route", () => {
+  for (const id of ["SMK-37_930", "ota-SMK-37_930", "SMK-37_901"]) assert.ok(hasOwnUpdater(id), id);
+  for (const id of ["SMK-37 Pro_016", "SMK-37 Pro_900", "SMK-37 Elite_920", "SMK-37+VA_102", "FM-1_918", "ota-SMK-37 Pro_900", null]) assert.ok(!hasOwnUpdater(id), id);
+  assert.equal(variantOf("SMK-37"), null);
 });

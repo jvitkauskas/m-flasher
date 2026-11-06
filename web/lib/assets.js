@@ -9,6 +9,10 @@ const VARIANTS = {
 
 export const variantOf = (model) => VARIANTS[model] ?? null;
 
+/** ChanceTheMaker's SMK firmware (Felucca SMK, Sloop SMK, Melodee SMK): an update request starts its
+ * own updater, which only takes its own kind of package. Tested on SMK-37_930. */
+export const hasOwnUpdater = (identity) => /^(ota-)?SMK-37_9\d\d$/.test(identity ?? "");
+
 let manifest = null;
 
 export async function loadManifest() {
