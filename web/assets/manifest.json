@@ -1,5 +1,5 @@
 {
-  "bootloaderVersion": "2.2-67bbe67",
+  "bootloaderVersion": "2.2-ddcc822",
   "stage": {
     "fm1": "stage-fm1.fwsc",
     "smk37-pro": "stage-smk37-pro.fwsc",
@@ -9,5 +9,10 @@
     "fm1": "m-bootloader-fm1.fwsc",
     "smk37-pro": "m-bootloader-smk37-pro.fwsc",
     "smk37-elite": "m-bootloader-smk37-elite.fwsc"
+  },
+  "stageListed": {
+    "fm1": "stage-fm1-listed.fwsc",
+    "smk37-pro": "stage-smk37-pro-listed.fwsc",
+    "smk37-elite": "stage-smk37-elite-listed.fwsc"
   }
 }

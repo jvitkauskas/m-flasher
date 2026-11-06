@@ -12,7 +12,7 @@ node --test web/test/*.test.mjs               # FLASHER_TEST_DATA=<dir with .fws
 A browser can't reach the chip's download mode, which appears as a USB disk. It can reach MIDI, and most firmware can't read its flash over MIDI, so the page works through one of two programs of ours:
 
 - **MIDI mode**, in m-bootloader 2.2 or newer, from its menu. It writes nothing until asked, and works with no firmware at all.
-- **The stage** (`stage-*.fwsc`), for a unit running firmware. The firmware stores it through its own update route, about 8 KiB of what it keeps for updates, and restarts. The installed bootloader, stock or ours, runs it from RAM. It's the same code as MIDI mode. It retires its update request first, so the next start returns to the firmware, and it gives up after 5 minutes with no message from the page.
+- **The stage** (`stage-*.fwsc`), for a unit running firmware. The firmware stores it through its own update route, about 8 KiB of what it keeps for updates, and restarts. The installed bootloader, stock or ours, runs it from RAM. It's the same code as MIDI mode. Felucca-family firmware only stores its own kind of updater, so the stage carries that kind's mark, and there's a second package for it that lists a blank `flash.bin`, which M-VAVE's firmware would refuse. It retires its update request first, so the next start returns to the firmware, and it gives up after 5 minutes with no message from the page.
 
 Both answer the commands in [m-bootloader's specification](https://github.com/jvitkauskas/m-bootloader/blob/main/docs/SPEC.md), sections 11.6 and 11.7: `0x12` says what's answering, `0x23` reads raw flash, `0x24` is the chip's CRC-32 of a range. Writing goes through their existing install, from a package: the page builds one from a backup or a plan. It checks the whole package before erasing, erases the first firmware sector first and writes it last, so an interruption can't pass as firmware.
 
@@ -26,4 +26,4 @@ Both answer the commands in [m-bootloader's specification](https://github.com/jv
 
 ## Tested
 
-See the pull request for the record. In short, on an FM-1, in Chromium through Web MIDI, every result compared byte for byte with M-Flasher on a computer. SLOOP 2.8.5, ChoralRoot and Melodee refuse the stage, and the page says so.
+See the pull request for the record. In short, on an FM-1, in Chromium through Web MIDI, every result compared byte for byte with M-Flasher on a computer. The stage runs on stock 015 and 016, Baud Girl, Felucca, SLOOP 2.8.5, ChoralRoot and Melodee.
