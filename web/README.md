@@ -1,6 +1,6 @@
 # M-Flasher for the web
 
-A static page that does what can be done from a browser, over USB MIDI: back up a unit, restore a backup, install firmware, and install m-bootloader. It needs a browser with Web MIDI, served over HTTPS or from `localhost`, and nothing else: no build step, no server, and nothing leaves the device.
+An experimental beta: a static page that does what can be done from a browser, over USB MIDI: back up a unit, restore a backup, install firmware, and install m-bootloader. It needs a browser with Web MIDI, served over HTTPS or from `localhost`, and nothing else: no build step, no server, and nothing leaves the device.
 
 ```sh
 python3 -m http.server 8000 --directory web   # then open http://localhost:8000

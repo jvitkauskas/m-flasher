@@ -97,7 +97,7 @@ their SVGs.
 FM-1s sold from late 2026 have a UCUN UC25HQ80 flash (`0xB36014`) in place of the
 Puya P25Q80H (`0x856014`). Owners report backups and restores with M-Flasher on
 it. One unit did not start after m-bootloader 1.1 or 1.2 was installed, and another
-runs 1.3 and 2.0 with its firmware, menu and download mode working; 2.1 has not been tried
+runs 1.3 and 2.0 with its firmware, menu and download mode working; 2.1 and 2.2 have not been tried
 ([#13](https://github.com/jvitkauskas/m-flasher/issues/13)). Its MIDI mode reinstalled
 the same firmware there, which rewrites only the first sector.
 
@@ -111,7 +111,7 @@ m-bootloader 2.0 and newer do not read the boot configuration, so installing the
 keeps only the 34-byte chip-key record, and they may use the room up to there. 2.1 adds
 the five settings 1.3 and older require, at `0x3FA0`, so that those start if installed
 later; 2.0 had only the record, at `0x3FDC`. The ROM loads a full-size image on an FM-1
-and an SMK-37. Build `2.1-861e43d`, on the same two units: 1.2 and 1.3 installed over it
+and an SMK-37. Build `2.2-64f7c9c`, on the same two units: installing it, an official 016 update, its MIDI mode and RAM stage, and on the FM-1 M-UPGRADE. Build `2.1-861e43d`, on the same two units: 1.2 and 1.3 installed over it
 start firmware, and it gives the same boot area over 2.0's configuration as over
 stock's, and through M-UPGRADE. Build `2.0-c43a32f`, the same bootloader code: installing with M-Flasher over 1.3 and with
 M-UPGRADE over 1.2, stock firmware, official 016 updates and Baud Girl's installer,
