@@ -1,0 +1,4 @@
+# The C runtime inside the executable: VCRUNTIME140.dll isn't part of Windows,
+# and without it a clean install can't even start the program.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
