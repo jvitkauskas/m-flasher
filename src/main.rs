@@ -42,8 +42,23 @@ fn main() {
     }
     if let Err(e) = ui::run() {
         eprintln!("cannot open the window: {e}");
+        #[cfg(windows)]
+        window_error(&e.to_string());
         std::process::exit(1);
     }
+}
+
+/// A windows-subsystem app has no console to print to: without this, it just
+/// doesn't appear. Mostly no OpenGL: a virtual machine or a missing graphics driver.
+#[cfg(windows)]
+fn window_error(error: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let text = format!(
+        "Cannot open the window: {error}\n\nIt needs OpenGL 2.0 or newer from the graphics driver, which a virtual machine or a remote session may not have.\n\nThe command line works without it: M-Flasher --help"
+    );
+    // SAFETY: both are valid NUL-terminated strings; no owner window
+    unsafe { MessageBoxW(std::ptr::null_mut(), wide(&text).as_ptr(), wide("M-Flasher").as_ptr(), MB_ICONERROR | MB_OK) };
 }
 
 /// Why the window cannot open on this Linux desktop, if it cannot: checked
