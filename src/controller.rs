@@ -711,17 +711,7 @@ impl Controller {
     pub fn open_backups(&self) {
         let dir = self.shared.lock().unwrap().backup_dir.clone();
         let _ = crate::ops::create_dirs(&dir);
-        let opener = if cfg!(windows) { "explorer" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-        let mut cmd = match std::env::var("SUDO_USER") {
-            // run with sudo: the file manager opens as the user, not as root
-            Ok(user) if !cfg!(windows) => {
-                let mut c = std::process::Command::new("sudo");
-                c.args(["-u", &user, opener]);
-                c
-            }
-            _ => std::process::Command::new(opener),
-        };
-        let _ = cmd.arg(&dir).spawn();
+        open_folder(&dir);
     }
 
     fn refresh_backups(&self) {
@@ -729,6 +719,36 @@ impl Controller {
         let list = recent_backups(&dir, 6);
         self.with(|s| s.backups = list);
     }
+}
+
+/// Through the shell, not by running "explorer": Windows would look for that
+/// next to this executable first, and start what it finds as administrator.
+#[cfg(windows)]
+fn open_folder(dir: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    const SW_SHOWNORMAL: i32 = 1;
+    let dir: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let open: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: both are valid NUL-terminated strings; the rest may be null.
+    unsafe {
+        ShellExecuteW(std::ptr::null_mut(), open.as_ptr(), dir.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+    }
+}
+
+#[cfg(not(windows))]
+fn open_folder(dir: &Path) {
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let mut cmd = match std::env::var("SUDO_USER") {
+        // run with sudo: the file manager opens as the user, not as root
+        Ok(user) => {
+            let mut c = std::process::Command::new("sudo");
+            c.args(["-u", &user, opener]);
+            c
+        }
+        _ => std::process::Command::new(opener),
+    };
+    let _ = cmd.arg(dir).spawn();
 }
 
 fn device_view(u: &Unit) -> DeviceView {
