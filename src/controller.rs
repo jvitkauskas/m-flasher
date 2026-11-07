@@ -723,17 +723,25 @@ impl Controller {
 
 /// Through the shell, not by running "explorer": Windows would look for that
 /// next to this executable first, and start what it finds as administrator.
+/// On its own thread, as the shell can take a while, and it wants COM there.
 #[cfg(windows)]
 fn open_folder(dir: &Path) {
     use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     const SW_SHOWNORMAL: i32 = 1;
     let dir: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    let open: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
-    // SAFETY: both are valid NUL-terminated strings; the rest may be null.
-    unsafe {
-        ShellExecuteW(std::ptr::null_mut(), open.as_ptr(), dir.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
-    }
+    std::thread::spawn(move || {
+        let open: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: both are valid NUL-terminated strings; the rest may be null.
+        unsafe {
+            let com = CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32);
+            ShellExecuteW(std::ptr::null_mut(), open.as_ptr(), dir.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+            if com >= 0 {
+                CoUninitialize();
+            }
+        }
+    });
 }
 
 #[cfg(not(windows))]
