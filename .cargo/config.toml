@@ -1,0 +1,9 @@
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = [
+    # The C runtime inside the executable: VCRUNTIME140.dll isn't part of Windows,
+    # and without it a clean install can't even start the program.
+    "-C", "target-feature=+crt-static",
+    # Its DLLs from System32 only (LOAD_LIBRARY_SEARCH_SYSTEM32): by default Windows
+    # looks next to the executable first, and would load what it finds as administrator.
+    "-C", "link-arg=/DEPENDENTLOADFLAG:0x800",
+]
