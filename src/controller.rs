@@ -138,6 +138,8 @@ pub struct Shared {
     pub files: HashMap<&'static str, PathBuf>,
     pub wipe: bool,
     pub with_boot: bool,
+    /// Restore: the unit keeps its own bootloader.
+    pub keep_boot: bool,
     pub boot_source: BootSource,
     /// A unit running normally, found on USB MIDI (its name), while none is in
     /// download mode: the soft key can switch it.
@@ -206,6 +208,7 @@ impl Controller {
                 // other's settings and pairings correctly
                 wipe: true,
                 with_boot: false,
+                keep_boot: false,
                 boot_source: BootSource::Open,
                 midi: None,
             })),
@@ -416,9 +419,9 @@ impl Controller {
     // ---- planning ----
 
     fn replan_now(&self) {
-        let (mode, files, wipe, with_boot, src) = {
+        let (mode, files, wipe, with_boot, keep_boot, src) = {
             let s = self.shared.lock().unwrap();
-            (s.mode, s.files.clone(), s.wipe, s.with_boot, s.boot_source)
+            (s.mode, s.files.clone(), s.wipe, s.with_boot, s.keep_boot, s.boot_source)
         };
         let guard = self.unit.lock().unwrap();
         let Some(unit) = guard.as_ref() else { return };
@@ -450,7 +453,7 @@ impl Controller {
                 None => return need(self, "Choose a backup file"),
                 Some(d) => {
                     let id = files.get("restore").and_then(|p| crate::ops::backup_unit_id(p));
-                    d.and_then(|d| unit.plan_restore(&d, id.as_deref()))
+                    d.and_then(|d| unit.plan_restore(&d, id.as_deref(), keep_boot))
                 }
             },
             Mode::Firmware => match read("firmware") {
@@ -531,6 +534,11 @@ impl Controller {
 
     pub fn set_with_boot(&self, v: bool) {
         self.with(|s| s.with_boot = v);
+        self.replan();
+    }
+
+    pub fn set_keep_boot(&self, v: bool) {
+        self.with(|s| s.keep_boot = v);
         self.replan();
     }
 

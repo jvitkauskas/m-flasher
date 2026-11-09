@@ -7,7 +7,7 @@
 //! compared (and rewritten once on a mismatch), and the image is saved as a
 //! backup before the first write of a session.
 
-use crate::boards::{Analysis, BOARDS, Board, CHIP_KEY, FLASH_SIZE, flash_tested};
+use crate::boards::{Analysis, BOARDS, Board, BootKind, CHIP_KEY, FLASH_SIZE, flash_tested};
 use crate::formats::{
     AppStatus, BOOT_AREA, Package, SECTOR, app_files_status, crc32, app_table, bankcb_check, bootloader_identity,
     build_boot_area, build_short_boot_area, config_cut_short, config_sys_clk, reads_config, stored_bootloader,
@@ -262,7 +262,8 @@ impl<F: Flash> Session<F> {
 
     /// backup_unit: the unit ID saved with the backup, if any. When both it and
     /// this unit's are known, they decide whether it is this unit's backup.
-    pub fn plan_restore(&self, data: &[u8], backup_unit: Option<&str>) -> Result<Plan, Error> {
+    /// keep_bootloader: the boot area is not restored (a newer bootloader kept).
+    pub fn plan_restore(&self, data: &[u8], backup_unit: Option<&str>, keep_bootloader: bool) -> Result<Plan, Error> {
         if data.len() != FLASH_SIZE {
             return refuse(format!("not a full backup: {} bytes, {FLASH_SIZE} expected", data.len()));
         }
@@ -280,7 +281,9 @@ impl<F: Flash> Session<F> {
         };
         let (mut notes, mut warnings) = (vec![], vec![]);
         let allowed = if same_unit {
-            notes.push("The whole flash is restored, the bootloader included.".into());
+            if !keep_bootloader {
+                notes.push("The whole flash is restored, the bootloader included.".into());
+            }
             for &(a, b) in factory {
                 if data[a..b] != self.flash[a..b] {
                     warnings.push(format!("This unit's factory data at {} is blank; the backup's is restored. \
@@ -305,6 +308,17 @@ impl<F: Flash> Session<F> {
                                    not restored, this unit keeps its own.",
                                   if backup_unit.is_some() && self.unit_id.is_some() { "is from" } else { "seems to come from" },
                                   ranges_text(factory)));
+            allowed
+        };
+        let allowed: Vec<(usize, usize)> = if keep_bootloader {
+            notes.push(format!("This unit keeps its bootloader ({}): the boot area ({}) is not restored.",
+                               self.analysis.bootloader_text, ranges_text(&[(0, BOOT_AREA)])));
+            if matches!(self.analysis.bootloader, BootKind::Damaged | BootKind::Unknown) {
+                warnings.push(format!("This unit's bootloader is {}: kept, the unit may not start. Restore the \
+                                       backup's with it.", self.analysis.bootloader_text));
+            }
+            allowed.into_iter().filter_map(|(a, b)| (a.max(BOOT_AREA) < b).then_some((a.max(BOOT_AREA), b))).collect()
+        } else {
             allowed
         };
         let mut target = self.flash.clone();

@@ -1,7 +1,7 @@
 //! Command-line mode (the same operations as the window):
 //!
 //! ```text
-//! m-flasher find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin
+//! m-flasher find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin [--keep-bootloader]
 //!           firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings]
 //!           bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot]
 //!           run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT]
@@ -15,7 +15,7 @@ use crate::scsi::{Device, ScsiError, find_devices};
 use std::io::Write;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: m-flasher [find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin |
+const USAGE: &str = "usage: m-flasher [find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin [--keep-bootloader] |
                  firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings] |
                  bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot] |
                  run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT]]
@@ -274,6 +274,7 @@ pub fn run(args: Vec<String>) -> i32 {
 fn main(args: Vec<String>) -> Result<(), Error> {
     let (mut pos, mut device, mut board, mut backup_dir, mut yes) = (vec![], None, None, default_backup_dir(), false);
     let (mut with_boot, mut wipe, mut stock, mut file, mut then_restart) = (false, false, None, None, false);
+    let mut keep_boot = false;
     let (mut ram_addr, mut calls, mut read_spec, mut output) = (None, vec![], None, None);
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
@@ -291,6 +292,7 @@ fn main(args: Vec<String>) -> Result<(), Error> {
             "--yes" => yes = true,
             "--with-bootloader" => with_boot = true,
             "--wipe-settings" => wipe = true,
+            "--keep-bootloader" => keep_boot = true,
             "--restart" => then_restart = true,
             "--version" => {
                 println!("{}", env!("CARGO_PKG_VERSION"));
@@ -375,7 +377,7 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         }
         "restore" => {
             let f = pos.get(1).ok_or_else(|| Error::Refused(USAGE.into()))?;
-            s.plan_restore(&read(f)?, crate::ops::backup_unit_id(std::path::Path::new(f)).as_deref())?
+            s.plan_restore(&read(f)?, crate::ops::backup_unit_id(std::path::Path::new(f)).as_deref(), keep_boot)?
         }
         "firmware" => s.plan_firmware(&read(pos.get(1).ok_or_else(|| Error::Refused(USAGE.into()))?)?, with_boot, wipe)?,
         _ => match (stock, file) {

@@ -355,7 +355,7 @@ impl eframe::App for App {
                 }
                 let chosen = st.file(FileKind::Restore);
                 for (i, b) in st.backups.iter().take(2).enumerate() {
-                    let y = 714.0 + i as f32 * 24.0;
+                    let y = 710.0 + i as f32 * 22.0;
                     let r = board.r(50.0, y - 11.0, 820.0, 22.0);
                     let (c, h) = clicked(&b.name, r);
                     let sel = chosen.as_deref() == Some(b.name.as_str());
@@ -373,7 +373,10 @@ impl eframe::App for App {
                         self.ctl.pick_backup(b.path.clone());
                     }
                 }
-                p.text(56.0, 772.0, Align2::LEFT_CENTER, &auto_line, "tech", 13.5, LAV, 2.0);
+                if checkbox(ui, &p, 56.0, 755.0, "Keep this unit's bootloader (don't restore the boot area)", st.keep_boot, active) {
+                    self.ctl.set_keep_boot(!st.keep_boot);
+                }
+                p.text(56.0, 780.0, Align2::LEFT_CENTER, &auto_line, "tech", 13.5, LAV, 2.0);
             }
             (_, Mode::Firmware) => {
                 if file_row(&p, "FIRMWARE FILE", st.file(FileKind::Firmware), "CHOOSE FILE", "choosefw") {
