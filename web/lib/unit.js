@@ -20,7 +20,7 @@ export const SMK37 = {
 };
 export const BOARDS = [FM1, SMK37];
 
-export const flashTested = (id) => BOARDS.some((b) => b.flashId === id);
+export const flashTested = (id) => BOARDS.some((b) => b.flashId === id || b.otherFlash.includes(id));
 
 // The flash chip's ID as shown, with which of the FM-1's two chips it is: firmware written
 // before the newer one came may not work on it (not save, say).

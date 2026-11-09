@@ -142,6 +142,9 @@ pub struct Shared {
     /// A unit running normally, found on USB MIDI (its name), while none is in
     /// download mode: the soft key can switch it.
     pub midi: Option<String>,
+    /// Recommend m-bootloader to the user (the unit has the stock bootloader):
+    /// the key that opens its recovery menu.
+    pub suggest_boot: Option<&'static str>,
 }
 
 fn file_key(k: FileKind) -> &'static str {
@@ -169,6 +172,8 @@ pub struct Controller {
     /// Windows could not open at all: not tried, nor asked about, again every
     /// scan, only once it is reconnected.
     declined: Arc<Mutex<Option<String>>>,
+    /// The units m-bootloader was recommended for (unit ID, or path): once each.
+    suggested: Arc<Mutex<Vec<String>>>,
     ctx: egui::Context,
 }
 
@@ -208,10 +213,12 @@ impl Controller {
                 with_boot: false,
                 boot_source: BootSource::Open,
                 midi: None,
+                suggest_boot: None,
             })),
             unit: Arc::new(Mutex::new(None)),
             plan: Arc::new(Mutex::new(None)),
             declined: Arc::new(Mutex::new(None)),
+            suggested: Arc::new(Mutex::new(vec![])),
             ctx,
         };
         c.log(format!("M-Flasher {} started · m-bootloader {open_version} bundled", env!("CARGO_PKG_VERSION")));
@@ -347,6 +354,7 @@ impl Controller {
             s.stage = [Stage::Idle; 4];
             s.pct = 0.0;
             s.backup_saved = None;
+            s.suggest_boot = None;
         });
     }
 
@@ -398,6 +406,11 @@ impl Controller {
                 c.log("The model is not certain: check it under DEVICE INFO before writing".into());
             }
             let map = sector_map(&unit.flash, unit.dev.chip_key(), unit.board());
+            let suggest = unit.bootloader_suggestion().filter(|_| {
+                let id = unit.unit_id.clone().unwrap_or_else(|| path.clone());
+                let mut asked = c.suggested.lock().unwrap();
+                !asked.contains(&id) && { asked.push(id); true }
+            });
             let mut unit = unit;
             unit.show_on_unit();
             *c.unit.lock().unwrap() = Some(unit);
@@ -407,6 +420,7 @@ impl Controller {
                 s.phase = Phase::Ready;
                 s.stage[0] = Stage::Done;
                 s.pct = 0.0;
+                s.suggest_boot = suggest;
             });
             c.replan_now();
             Ok(())
@@ -522,6 +536,27 @@ impl Controller {
             return;
         }
         self.replan();
+    }
+
+    /// The answer to the m-bootloader recommendation: yes chooses installing
+    /// it, to be reviewed as any write. Whether it was taken: a yes while the
+    /// connection is still being planned leaves the question up, to be answered again.
+    pub fn answer_boot_suggestion(&self, install: bool) -> bool {
+        let taken = self.with(|s| {
+            if install && s.busy {
+                return false;
+            }
+            s.suggest_boot = None;
+            if install {
+                s.mode = Mode::Bootloader;
+                s.boot_source = BootSource::Open;
+            }
+            true
+        });
+        if taken && install {
+            self.replan();
+        }
+        taken
     }
 
     pub fn set_wipe(&self, v: bool) {
