@@ -7,6 +7,14 @@
 the unit. The app is not signed, so the first time Windows may say it
 protected your PC: choose **More info → Run anyway**.
 
+Microsoft Defender sometimes takes a new release for a threat and deletes
+it, often under a name ending in `!ml` (a guess by its machine-learning
+model). Each release is reported to Microsoft as a false alarm, which
+usually clears it within a few days. Until then, check the zip came from
+this repository's releases, then in **Windows Security → Virus & threat
+protection → Protection history** pick the M-Flasher entry and choose
+**Actions → Restore**. Please open an issue with the threat's name.
+
 **macOS** (11 or newer, Apple silicon and Intel). Open
 `M-Flasher-…-macos.dmg` and drag M-Flasher to Applications. The first time
 macOS blocks it, as it is not signed with an Apple certificate: **System
