@@ -756,7 +756,7 @@ fn open_bootloader_and_back_to_stock() {
 fn restore_same_unit_other_unit_other_model() {
     let stock = need!("smk37-stock.bin");
     let mut s = session(need!("smk37-snoop37.bin"));
-    let p = s.plan_restore(&stock, None).unwrap();
+    let p = s.plan_restore(&stock, None, false).unwrap();
     assert_eq!(p.allowed, vec![(0, 0x100000)]);
     apply(&mut s, &p).unwrap();
     assert_eq!(s.dev.mem, stock);
@@ -764,9 +764,33 @@ fn restore_same_unit_other_unit_other_model() {
     other[0xC1100] ^= 0xFF;
     other[0xFF800] ^= 0xFF;
     let s = session(stock.clone());
-    let p = s.plan_restore(&other, None).unwrap();
+    let p = s.plan_restore(&other, None, false).unwrap();
     assert!(!p.warnings.is_empty() && p.sectors.is_empty());
-    assert!(matches!(s.plan_restore(&need!("fm1-stock.bin"), None), Err(Error::Refused(_))));
+    assert!(matches!(s.plan_restore(&need!("fm1-stock.bin"), None, false), Err(Error::Refused(_))));
+}
+
+#[test]
+fn a_restore_can_keep_the_units_bootloader() {
+    let (boot, _) = bundled_bootloader(&FM1).unwrap();
+    let current = with_boot_area(fm1_016_image(), boot);
+    // an older backup: an older bootloader, and other firmware data
+    let mut backup = with_boot_area(fm1_016_image(), &older_size(boot));
+    backup[0x80000] = 0x42;
+    let mut s = fm1_session(current.clone(), "keep-boot");
+    let whole = s.plan_restore(&backup, None, false).unwrap();
+    assert!(whole.sectors.iter().any(|&a| a < BOOT_AREA), "the backup's bootloader goes back");
+    let p = s.plan_restore(&backup, None, true).unwrap();
+    assert!(p.allowed.iter().all(|&(a, _)| a >= BOOT_AREA), "{:?}", p.allowed);
+    assert!(p.notes.iter().any(|n| n.contains("keeps its bootloader")), "{:?}", p.notes);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    apply(&mut s, &p).unwrap();
+    assert_eq!(s.dev.mem[..BOOT_AREA], current[..BOOT_AREA]);
+    assert_eq!(s.dev.mem[0x80000], 0x42);
+    // a damaged bootloader is kept only with a warning
+    let mut damaged = current;
+    damaged[..BOOT_AREA].fill(0xFF);
+    let p = fm1_session(damaged, "damaged-boot").plan_restore(&backup, None, true).unwrap();
+    assert!(p.warnings.iter().any(|w| w.contains("may not start")), "{:?}", p.warnings);
 }
 
 #[test]
@@ -811,9 +835,9 @@ fn unit_id_decides_same_unit() {
     let mut other = stock.clone();
     other[0xC1100] ^= 0xFF;             // factory data differs ...
     let s = session_with(own(stock.clone(), "aaaaaaaaaaaaaaaa"));
-    let p = s.plan_restore(&other, Some("aaaaaaaaaaaaaaaa")).unwrap();
+    let p = s.plan_restore(&other, Some("aaaaaaaaaaaaaaaa"), false).unwrap();
     assert_eq!(p.allowed, vec![(0, 0x100000)], "... but the IDs say it is this unit's backup");
-    let p = s.plan_restore(&stock, Some("bbbbbbbbbbbbbbbb")).unwrap();
+    let p = s.plan_restore(&stock, Some("bbbbbbbbbbbbbbbb"), false).unwrap();
     assert!(!p.warnings.is_empty() && p.allowed != vec![(0, 0x100000)], "identical data, another unit's ID");
 }
 

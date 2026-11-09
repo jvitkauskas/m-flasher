@@ -365,15 +365,15 @@ impl eframe::App for App {
                 }
                 let chosen = st.file(FileKind::Restore);
                 for (i, b) in st.backups.iter().take(2).enumerate() {
-                    let y = 714.0 + i as f32 * 24.0;
-                    let r = board.r(50.0, y - 11.0, 820.0, 22.0);
+                    let y = 706.0 + i as f32 * 20.0;
+                    let r = board.r(50.0, y - 10.0, 820.0, 20.0);
                     let (c, h) = clicked(&b.name, r);
                     let sel = chosen.as_deref() == Some(b.name.as_str());
                     if h && active {
                         p.rect(r, hex(0x312a26));
                     }
                     if sel || (h && active) {
-                        p.rect(board.r(50.0, y - 11.0, 2.0, 22.0), MINT);
+                        p.rect(board.r(50.0, y - 10.0, 2.0, 20.0), MINT);
                     }
                     let col = if sel { MINT } else { INK };
                     p.text(58.0, y, Align2::LEFT_CENTER, &b.name, "plex", 14.0, col, 0.0);
@@ -382,6 +382,9 @@ impl eframe::App for App {
                     if c && active {
                         self.ctl.pick_backup(b.path.clone());
                     }
+                }
+                if checkbox(ui, &p, 56.0, 748.0, "Keep this unit's bootloader (don't restore the boot area)", st.keep_boot, active) {
+                    self.ctl.set_keep_boot(!st.keep_boot);
                 }
                 p.text(56.0, 772.0, Align2::LEFT_CENTER, &auto_line, "tech", 13.5, LAV, 2.0);
             }

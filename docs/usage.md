@@ -93,7 +93,7 @@ stock firmware takes about half a minute).
 | Action | What it writes |
 | --- | --- |
 | **Back up the whole flash** | nothing: saves the 1 MiB flash image and a `.json` describing it |
-| **Restore a backup** | the parts that differ; a backup of another unit keeps this unit's own factory data (calibration, Bluetooth address) |
+| **Restore a backup** | the parts that differ; a backup of another unit keeps this unit's own factory data (calibration, Bluetooth address). With **Keep this unit's bootloader**, not the boot area (16 KiB): an older backup then leaves a newer m-bootloader in place |
 | **Install firmware (.fwsc)** | the firmware from an M-VAVE package (or a custom one in the same format); optionally the package's stock bootloader, and optionally erasing the settings and Bluetooth pairings |
 | **Install m-bootloader** | the boot area only (16 KiB), the build for the identified model; of the unit's boot configuration, which it does not read, only the chip key that firmware installers need is kept |
 | **Put back the stock bootloader** | the boot area only, all of it from an official package, the full configuration included |
@@ -168,8 +168,9 @@ m-flasher run-ram IMAGE --addr 0x01C28000 [--call FC60]... [--read ADDR:LEN -o O
 ```
 
 Options: `--device PATH` (with more than one unit), `--board fm1|smk37` (when
-the model is uncertain), `--backup-dir DIR`, `--yes`, and `--restart` (restore,
-firmware and bootloader: start the unit once written). Changes are shown first
+the model is uncertain), `--backup-dir DIR`, `--yes`, `--keep-bootloader`
+(restore: not the boot area), and `--restart` (restore, firmware and bootloader:
+start the unit once written). Changes are shown first
 and need a typed `yes`, or `--yes`.
 
 - Windows: `M-Flasher.exe info`; Windows asks for administrator rights the

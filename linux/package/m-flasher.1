@@ -21,6 +21,7 @@ m-flasher \- back up, restore and reinstall the firmware of M-VAVE FM-1 and SMK-
 .RI [ options ]
 .B restore
 .I backup.bin
+.RB [ \-\-keep\-bootloader ]
 .br
 .B m-flasher
 .RI [ options ]
@@ -86,7 +87,9 @@ Read the unit's flash and show the model, firmware and bootloader.
 Save the whole flash and a .json describing it.
 .TP
 .BI restore " backup.bin"
-Write the parts of a backup that differ from the unit.
+Write the parts of a backup that differ from the unit;
+.B \-\-keep\-bootloader
+leaves the unit's bootloader (the boot area) as it is.
 .TP
 .BI firmware " package.fwsc"
 Install the firmware from an M-VAVE package;
