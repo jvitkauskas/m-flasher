@@ -539,20 +539,24 @@ impl Controller {
     }
 
     /// The answer to the m-bootloader recommendation: yes chooses installing
-    /// it, to be reviewed as any write.
-    pub fn answer_boot_suggestion(&self, install: bool) {
-        let replan = self.with(|s| {
+    /// it, to be reviewed as any write. Whether it was taken: a yes while the
+    /// connection is still being planned leaves the question up, to be answered again.
+    pub fn answer_boot_suggestion(&self, install: bool) -> bool {
+        let taken = self.with(|s| {
+            if install && s.busy {
+                return false;
+            }
             s.suggest_boot = None;
-            let ok = install && !s.busy;
-            if ok {
+            if install {
                 s.mode = Mode::Bootloader;
                 s.boot_source = BootSource::Open;
             }
-            ok
+            true
         });
-        if replan {
+        if taken && install {
             self.replan();
         }
+        taken
     }
 
     pub fn set_wipe(&self, v: bool) {

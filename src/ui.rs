@@ -757,11 +757,10 @@ impl App {
                         2 => ctl.confirm(),
                         3 => ctl.set_model("fm1"),
                         4 => ctl.set_model("smk37"),
-                        5 => {
-                            ctl.answer_boot_suggestion(true);
-                            self.review_when_planned = true;
+                        5 => self.review_when_planned = ctl.answer_boot_suggestion(true),
+                        6 => {
+                            ctl.answer_boot_suggestion(false);
                         }
-                        6 => ctl.answer_boot_suggestion(false),
                         _ => {}
                     }
                     self.dialog = Dialog::None;
