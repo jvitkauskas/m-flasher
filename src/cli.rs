@@ -342,6 +342,9 @@ fn main(args: Vec<String>) -> Result<(), Error> {
     if then_restart && !matches!(cmd.as_str(), "restore" | "firmware" | "bootloader") {
         return Err(Error::Refused(format!("--restart is for restore, firmware and bootloader\n{USAGE}")));
     }
+    if keep_boot && cmd != "restore" {
+        return Err(Error::Refused(format!("--keep-bootloader is for restore\n{USAGE}")));
+    }
     // checked before the unit is touched
     let ram = if cmd == "run-ram" {
         let file = pos.get(1).ok_or_else(|| Error::Refused(RUN_RAM_HELP.into()))?;
