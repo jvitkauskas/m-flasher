@@ -307,6 +307,13 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         }
     }
     let cmd = pos.first().cloned().unwrap_or_default();
+    // before any command runs, find and download-mode too
+    if then_restart && !matches!(cmd.as_str(), "restore" | "firmware" | "bootloader") {
+        return Err(Error::Refused(format!("--restart is for restore, firmware and bootloader\n{USAGE}")));
+    }
+    if keep_boot && cmd != "restore" {
+        return Err(Error::Refused(format!("--keep-bootloader is for restore\n{USAGE}")));
+    }
     if cmd == "find" {
         for (p, d) in find_devices() {
             println!("{p}\t{d}");
@@ -338,12 +345,6 @@ fn main(args: Vec<String>) -> Result<(), Error> {
     }
     if cmd != "run-ram" && (ram_addr.is_some() || !calls.is_empty() || read_spec.is_some() || output.is_some()) {
         return Err(Error::Refused(format!("--addr, --call, --read and -o are for run-ram\n{USAGE}")));
-    }
-    if then_restart && !matches!(cmd.as_str(), "restore" | "firmware" | "bootloader") {
-        return Err(Error::Refused(format!("--restart is for restore, firmware and bootloader\n{USAGE}")));
-    }
-    if keep_boot && cmd != "restore" {
-        return Err(Error::Refused(format!("--keep-bootloader is for restore\n{USAGE}")));
     }
     // checked before the unit is touched
     let ram = if cmd == "run-ram" {
