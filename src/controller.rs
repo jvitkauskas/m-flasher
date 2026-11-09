@@ -165,8 +165,9 @@ pub struct Controller {
     unit: Arc<Mutex<Option<Unit>>>,
     plan: Arc<Mutex<Option<Plan>>>,
     /// The unit M-Flasher had no rights to open (the system's dialog for
-    /// administrator rights cancelled, Linux's udev rule missing): not tried,
-    /// nor asked about, again every scan, only once it is reconnected.
+    /// administrator rights cancelled, Linux's udev rule missing), or on
+    /// Windows could not open at all: not tried, nor asked about, again every
+    /// scan, only once it is reconnected.
     declined: Arc<Mutex<Option<String>>>,
     ctx: egui::Context,
 }
@@ -360,7 +361,9 @@ impl Controller {
             c.log(format!("Unit found in download mode: {path}"));
             let mut log = |m: String| c.log(m);
             let dev = Device::open(&path).inspect_err(|e| {
-                if let ScsiError::NeedsAdmin(_) = e {
+                // Windows: any failure may have come after the system's dialog
+                // (the helper not starting), which every scan would show again
+                if cfg!(windows) || matches!(e, ScsiError::NeedsAdmin(_)) {
                     *c.declined.lock().unwrap() = Some(path.clone());
                 }
             })?;

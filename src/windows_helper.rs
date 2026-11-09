@@ -10,7 +10,8 @@
 //!
 //! Each side checks the other: the app creates the pipe and talks only to the
 //! process it started; the helper talks only to the process given on its
-//! command line, and opens only a disk it finds on the unit's USB IDs itself.
+//! command line, and only if that is this same M-Flasher.exe, and opens only a
+//! disk it finds on the unit's USB IDs itself.
 //!
 //! Run as administrator (an administrator prompt), the app uses the unit
 //! directly.
@@ -29,7 +30,10 @@ use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId, PIPE_NOWAIT, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT, SetNamedPipeHandleState,
 };
-use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetProcessId, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcessId, GetProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    WaitForSingleObject,
+};
 use windows_sys::Win32::UI::Shell::{SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
 
 /// `M-Flasher --scsi-helper PIPE PID`: the administrator helper.
@@ -71,7 +75,7 @@ static HELPER: Mutex<Option<Helper>> = Mutex::new(None);
 impl Helper {
     /// Starts the helper after Windows asks for administrator rights.
     fn start() -> Result<Helper, ScsiError> {
-        let failed = |what: String| ScsiError::Failed(format!("cannot start the administrator helper: {what}"));
+        let failed = |what: String| ScsiError::Failed(format!("cannot start the administrator helper ({what}): reconnect the unit to try again"));
         // SAFETY: plain FFI call.
         let app = unsafe { GetCurrentProcessId() };
         // unguessable, so no other program has it ready; FIRST_PIPE_INSTANCE refuses one that does
@@ -245,7 +249,7 @@ pub fn scsi_helper(args: &[String]) -> i32 {
     };
     let mut server = 0u32;
     // SAFETY: the pipe is open; server is valid for the call.
-    if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle() as HANDLE, &mut server) } == 0 || server != app {
+    if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle() as HANDLE, &mut server) } == 0 || server != app || !same_program(server) {
         return 1;
     }
     let mut device: Option<Disk> = None;
@@ -293,6 +297,31 @@ pub fn scsi_helper(args: &[String]) -> i32 {
         if pipe.write_all(&frame).and_then(|_| pipe.flush()).is_err() {
             return 0;
         }
+    }
+}
+
+/// Whether the process runs this same executable: another program could start
+/// the helper for a pipe of its own.
+fn same_program(pid: u32) -> bool {
+    // SAFETY: plain FFI call; the handle is closed below.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return false;
+    }
+    let mut buf = vec![0u16; 32768];
+    let mut len = buf.len() as u32;
+    // SAFETY: buf holds len characters; h is valid.
+    let ok = unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) };
+    // SAFETY: h came from OpenProcess.
+    unsafe { CloseHandle(h) };
+    if ok == 0 {
+        return false;
+    }
+    let theirs = std::path::PathBuf::from(String::from_utf16_lossy(&buf[..len as usize]));
+    // canonical: the same file however each was started (short names, case)
+    match (std::fs::canonicalize(theirs), std::env::current_exe().and_then(std::fs::canonicalize)) {
+        (Ok(a), Ok(b)) => a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()),
+        _ => false,
     }
 }
 
