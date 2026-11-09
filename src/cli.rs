@@ -362,6 +362,10 @@ fn main(args: Vec<String>) -> Result<(), Error> {
     }
     let conn = Connection::start(&path, Device::open(&path)?, &mut log)?;
     let mut s = Session::open(conn, backup_dir, &mut log, &mut progress)?;
+    let (retried, last) = crate::jl::Flash::retries(&s.dev);
+    if retried > 0 {
+        log(format!("{retried} USB transfers had to be sent again (last: {last}): check the cable and port"));
+    }
     if let Some(b) = board {
         s.board_override = Some(board_from_key(&b).ok_or_else(|| Error::Refused(format!("unknown board {b}")))?);
     }

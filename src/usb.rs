@@ -121,21 +121,24 @@ impl Device {
         let _ = self.handle.clear_halt(self.ep_out);
     }
 
+    /// The status block of the current command. A device out of step (on
+    /// macOS, after the system's disk driver let go of it mid-command) sends
+    /// something else first, data or an earlier command's status: skipped, a
+    /// few times, rather than failing (an exact 13-byte read would overflow).
     fn read_csw(&mut self) -> Result<[u8; 13], rusb::Error> {
-        let mut csw = [0u8; 13];
-        match self.handle.read_bulk(self.ep_in, &mut csw, TIMEOUT) {
-            Ok(13) => Ok(csw),
-            Ok(_) => Err(rusb::Error::Io),
-            Err(rusb::Error::Pipe) => {
-                // a stalled endpoint: clear it and try once more
-                let _ = self.handle.clear_halt(self.ep_in);
-                match self.handle.read_bulk(self.ep_in, &mut csw, TIMEOUT)? {
-                    13 => Ok(csw),
-                    _ => Err(rusb::Error::Io),
+        let mut buf = [0u8; 512];
+        for _ in 0..3 {
+            match self.handle.read_bulk(self.ep_in, &mut buf, TIMEOUT) {
+                Ok(13) if csw_tag(&buf) == Some(self.tag) => return Ok(buf[..13].try_into().unwrap()),
+                Ok(_) => {}
+                // a stalled endpoint: clear it and read again
+                Err(rusb::Error::Pipe) => {
+                    let _ = self.handle.clear_halt(self.ep_in);
                 }
+                Err(e) => return Err(e),
             }
-            Err(e) => Err(e),
         }
+        Err(rusb::Error::Io)
     }
 
     fn transfer(&mut self, cdb: &[u8], data: Data) -> Result<usize, ScsiError> {
@@ -157,15 +160,28 @@ impl Device {
         // libusb ends a read at a short packet: the device may send less.
         // No data, no data phase (an empty write would send a zero-length
         // packet, which the device takes for the next command).
+        let mut early = None;
         let phase = match data {
             Data::None => Ok(0),
             Data::In(b) if b.is_empty() => Ok(0),
             Data::Out(b) if b.is_empty() => Ok(0),
-            Data::In(buf) => match self.handle.read_bulk(self.ep_in, buf, TIMEOUT) {
-                Ok(n) => Ok(n),
-                Err(rusb::Error::Pipe) => Err(self.ep_in),
-                Err(e) => return Err(failed(&format!("command {name}: reading its data"), e)),
-            },
+            Data::In(buf) => {
+                let mut skipped = 0;
+                loop {
+                    match self.handle.read_bulk(self.ep_in, buf, TIMEOUT) {
+                        // this command's status: the device sent no data
+                        Ok(13) if csw_tag(buf) == Some(self.tag) => {
+                            early = Some(buf[..13].try_into().unwrap());
+                            break Ok(0);
+                        }
+                        // an earlier command's status, left over: the data follows
+                        Ok(13) if skipped < 2 && csw_tag(buf).is_some() => skipped += 1,
+                        Ok(n) => break Ok(n),
+                        Err(rusb::Error::Pipe) => break Err(self.ep_in),
+                        Err(e) => return Err(failed(&format!("command {name}: reading its data"), e)),
+                    }
+                }
+            }
             Data::Out(buf) => match self.handle.write_bulk(self.ep_out, buf, TIMEOUT) {
                 Ok(n) if n == buf.len() => Ok(n),
                 Ok(n) => return Err(ScsiError::Failed(format!("command {name}: {n} of {} bytes sent", buf.len()))),
@@ -178,7 +194,10 @@ impl Device {
             let _ = self.handle.clear_halt(ep);
             0
         });
-        let csw = self.read_csw().map_err(|e| failed(&format!("command {name}: reading its status"), e))?;
+        let csw = match early {
+            Some(csw) => csw,
+            None => self.read_csw().map_err(|e| failed(&format!("command {name}: reading its status"), e))?,
+        };
         if u32::from_le_bytes(csw[0..4].try_into().unwrap()) != CSW_SIGNATURE
             || u32::from_le_bytes(csw[4..8].try_into().unwrap()) != self.tag
         {
@@ -190,6 +209,11 @@ impl Device {
             s => Err(ScsiError::Failed(format!("command {name}: phase error (status {s})"))),
         }
     }
+}
+
+/// The tag of a status block (CSW), if `b` starts with one.
+fn csw_tag(b: &[u8]) -> Option<u32> {
+    (b.len() >= 13 && b[0..4] == CSW_SIGNATURE.to_le_bytes()).then(|| u32::from_le_bytes(b[4..8].try_into().unwrap()))
 }
 
 impl super::Scsi for Device {

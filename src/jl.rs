@@ -171,12 +171,25 @@ impl<S: Scsi> Connection<S> {
     /// Opens the session: checks that it is a download-mode device, and does
     /// nothing else (no loader is uploaded or started).
     pub fn open(path: &str, mut dev: S) -> Result<Self, ScsiError> {
-        let (vendor, product) = dev.inquiry()?;
+        // the first command can meet what the system's disk driver left behind
+        // (macOS): a failed transfer resets the transport, and it is tried again
+        const TRIES: u32 = 3;
+        let (mut retried, mut last_retry) = (0, String::new());
+        let (vendor, product) = loop {
+            match dev.inquiry() {
+                Err(ScsiError::Failed(e)) if retried + 1 < TRIES => {
+                    retried += 1;
+                    last_retry = format!("identifying the unit: {e}");
+                    std::thread::sleep(std::time::Duration::from_millis(250 * retried as u64));
+                }
+                r => break r?,
+            }
+        };
         if vendor != VENDOR || product != PRODUCT {
             return Err(ScsiError::Failed(format!("{path} is \"{vendor} {product}\", not a {VENDOR} {PRODUCT} download-mode device")));
         }
         Ok(Connection { path: path.into(), dev, chip_key: 0, flash_id: 0, io: 512, read_io: 4096,
-                        retried: 0, last_retry: String::new(), own: String::new(), mhz: 0 })
+                        retried, last_retry, own: String::new(), mhz: 0 })
     }
 
     pub fn start(path: &str, dev: S, log: &mut dyn FnMut(String)) -> Result<Self, ScsiError> {
