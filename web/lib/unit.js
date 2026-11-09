@@ -22,6 +22,11 @@ export const BOARDS = [FM1, SMK37];
 
 export const flashTested = (id) => BOARDS.some((b) => b.flashId === id || b.otherFlash.includes(id));
 
+// The flash chip's ID as shown, with which of the FM-1's two chips it is: firmware written
+// before the newer one came may not work on it (not save, say).
+export const flashText = (id) =>
+  hex(id, 6) + (id === FM1.flashId ? " (old)" : FM1.otherFlash.includes(id) ? " (new)" : "");
+
 const matches = (flash, at, text) => {
   const bytes = new TextEncoder().encode(text);
   return flash.length >= at + bytes.length && bytes.every((b, i) => flash[at + i] === b);
@@ -75,7 +80,7 @@ export function analyse(flash, flashId, key) {
     || (region("VM") === 0xba000 && region("SEQ64") === 0xda000 && region("BTIF") === 0xec000)) {
     evidence.push([FM1, false, "the firmware uses the FM-1 flash layout"]);
   }
-  if (flashId != null) for (const b of BOARDS) if (flashId === b.flashId || b.otherFlash.includes(flashId)) evidence.push([b, false, `flash chip ${hex(flashId, 6)}`]);
+  if (flashId != null) for (const b of BOARDS) if (flashId === b.flashId || b.otherFlash.includes(flashId)) evidence.push([b, false, `flash chip ${flashText(flashId)}`]);
   const keys = (strong) => [...new Set(evidence.filter((e) => e[1] === strong).map((e) => e[0].key))];
   const strong = keys(true);
   const weak = keys(false);

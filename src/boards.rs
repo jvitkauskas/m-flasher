@@ -51,6 +51,19 @@ pub static SMK37: Board = Board {
 };
 pub static BOARDS: [&Board; 2] = [&FM1, &SMK37];
 
+/// The flash chip's ID as shown, with which of the FM-1's two chips it is: firmware
+/// written before the newer one came may not work on it (not save, say).
+pub fn flash_text(id: u32) -> String {
+    let which = if id == FM1.flash_id {
+        " (old)"
+    } else if FM1.other_flash.contains(&id) {
+        " (new)"
+    } else {
+        ""
+    };
+    format!("0x{id:06X}{which}")
+}
+
 /// Whether m-bootloader has been run on this flash chip.
 pub fn flash_tested(id: u32) -> bool {
     BOARDS.iter().any(|b| b.flash_id == id || b.other_flash.contains(&id))
@@ -128,7 +141,7 @@ impl Analysis {
         if let Some(id) = flash_id {
             for b in BOARDS {
                 if id == b.flash_id || b.other_flash.contains(&id) {
-                    ev.push((b, false, format!("flash chip 0x{id:06X}")));
+                    ev.push((b, false, format!("flash chip {}", flash_text(id))));
                 }
             }
         }
