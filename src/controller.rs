@@ -398,6 +398,10 @@ impl Controller {
                 s.phase = Phase::Ready;
                 s.stage[0] = Stage::Done;
                 s.pct = 0.0;
+                // an earlier failure to connect (rights refused, say) is over now
+                if s.alert.as_ref().is_some_and(|(_, t)| t.starts_with("USB error during connecting")) {
+                    s.alert = None;
+                }
             });
             c.replan_now();
             Ok(())
