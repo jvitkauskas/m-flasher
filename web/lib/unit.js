@@ -20,7 +20,7 @@ export const SMK37 = {
 };
 export const BOARDS = [FM1, SMK37];
 
-export const flashTested = (id) => BOARDS.some((b) => b.flashId === id);
+export const flashTested = (id) => BOARDS.some((b) => b.flashId === id || b.otherFlash.includes(id));
 
 const matches = (flash, at, text) => {
   const bytes = new TextEncoder().encode(text);

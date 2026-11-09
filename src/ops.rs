@@ -7,7 +7,7 @@
 //! compared (and rewritten once on a mismatch), and the image is saved as a
 //! backup before the first write of a session.
 
-use crate::boards::{Analysis, BOARDS, Board, CHIP_KEY, FLASH_SIZE, flash_tested};
+use crate::boards::{Analysis, BOARDS, Board, BootKind, CHIP_KEY, FLASH_SIZE, flash_tested};
 use crate::formats::{
     AppStatus, BOOT_AREA, Package, SECTOR, app_files_status, crc32, app_table, bankcb_check, bootloader_identity,
     build_boot_area, build_short_boot_area, config_cut_short, config_sys_clk, reads_config, stored_bootloader,
@@ -196,6 +196,15 @@ impl<F: Flash> Session<F> {
 
     fn need_board(&self) -> Result<&'static Board, Error> {
         self.board().ok_or_else(|| Error::Refused("the model could not be identified: choose it first".into()))
+    }
+
+    /// Whether to recommend m-bootloader, and the key that opens its recovery menu:
+    /// the unit has the stock bootloader, a model known for certain, and a flash
+    /// chip m-bootloader runs on.
+    pub fn bootloader_suggestion(&self) -> Option<&'static str> {
+        let board = self.board()?;
+        let certain = self.analysis.certain || self.board_override.is_some();
+        (self.analysis.bootloader == BootKind::Stock && certain && flash_tested(self.dev.flash_id())).then_some(board.menu_key)
     }
 
     /// (label, value) pairs for display and for the backup's .json.
@@ -432,9 +441,8 @@ impl<F: Flash> Session<F> {
         let id = self.dev.flash_id();
         let mut warnings = vec![];
         if package.is_none() && !flash_tested(id) {
-            warnings.push(format!("This unit's flash chip (0x{id:06X}) has had little testing with m-bootloader. One FM-1 with \
-                                   the newer chip 0xB36014 did not start after an older version was installed, and why is not known; \
-                                   another runs 1.3 and 2.0. Install it at your own risk."));
+            warnings.push(format!("This unit's flash chip (0x{id:06X}) is not one m-bootloader is known to run on. \
+                                   Install it at your own risk."));
         }
         if package.is_none() && full {
             let hz = config_sys_clk(&self.flash);

@@ -98,6 +98,12 @@ stock firmware takes about half a minute).
 | **Install m-bootloader** | the boot area only (16 KiB), the build for the identified model; of the unit's boot configuration, which it does not read, only the chip key that firmware installers need is kept |
 | **Put back the stock bootloader** | the boot area only, all of it from an official package, the full configuration included |
 
+On a unit with M-VAVE's stock bootloader, the window recommends installing
+m-bootloader once it has read the flash, once per unit: with it, a unit whose
+firmware doesn't start can be reflashed without opening it. **Yes** shows the
+change for review, as any write; **No** leaves the unit as it is, and
+**Flash bootloader** installs it later.
+
 Use the official `.fwsc` files from M-VAVE's website as they are: no
 conversion is needed. FM-1 **016** is supported, including its DX7 data file
 and new settings and sequencer layout. Erasing settings clears settings and

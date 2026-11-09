@@ -336,6 +336,24 @@ fn the_newer_fm1_flash_chip_identifies_the_model() {
 }
 
 #[test]
+fn m_bootloader_is_recommended_over_the_stock_bootloader() {
+    let with_chip = |flash: Vec<u8>, id: u32| {
+        let mut f = own(flash, "suggest");
+        f.id = id;
+        session_with(f)
+    };
+    let stock = with_boot_area(fm1_016_image(), &stock_boot());
+    assert_eq!(with_chip(stock.clone(), FM1.flash_id).bootloader_suggestion(), Some("PLAY"));
+    assert_eq!(with_chip(stock.clone(), 0xB36014).bootloader_suggestion(), Some("PLAY"), "the newer chip too");
+    let mut unknown = with_chip(stock.clone(), 0xEF4014);
+    assert_eq!(unknown.bootloader_suggestion(), None, "the model isn't certain");
+    unknown.board_override = Some(&FM1);
+    assert_eq!(unknown.bootloader_suggestion(), None, "a chip m-bootloader isn't known to run on");
+    let (boot, _) = bundled_bootloader(&FM1).unwrap();
+    assert_eq!(with_chip(with_boot_area(stock, boot), FM1.flash_id).bootloader_suggestion(), None, "already installed");
+}
+
+#[test]
 fn installing_m_bootloader_warns_about_an_untested_flash_chip() {
     let (boot, _) = bundled_bootloader(&FM1).unwrap();
     let flash = with_boot_area(fm1_016_image(), boot);
@@ -344,15 +362,17 @@ fn installing_m_bootloader_warns_about_an_untested_flash_chip() {
         f.id = id;
         session_with(f)
     };
-    let untested = with_chip(0xB36014, "untested-chip");
+    let mut untested = with_chip(0xEF4014, "untested-chip");
+    untested.board_override = Some(&FM1); // an unknown chip leaves the model uncertain
     let p = untested.plan_bootloader(None, None).unwrap();
-    assert!(p.warnings.iter().any(|w| w.contains("0xB36014")), "{:?}", p.warnings);
+    assert!(p.warnings.iter().any(|w| w.contains("0xEF4014")), "{:?}", p.warnings);
     let p = untested.plan_bootloader(Some(boot), None).unwrap();
-    assert!(p.warnings.iter().any(|w| w.contains("0xB36014")), "a given file is no safer: {:?}", p.warnings);
+    assert!(p.warnings.iter().any(|w| w.contains("0xEF4014")), "a given file is no safer: {:?}", p.warnings);
     // the stock bootloader is what the unit came with
     let pkg = package("FM-1_016", &flash[..0xA9000]);
     assert!(untested.plan_bootloader(None, Some(&pkg)).unwrap().warnings.is_empty());
-    for id in [FM1.flash_id, SMK37.flash_id] {
+    // the FM-1's newer chip too, on owners' reports
+    for id in [FM1.flash_id, 0xB36014, SMK37.flash_id] {
         assert!(with_chip(id, "tested-chip").plan_bootloader(None, None).unwrap().warnings.is_empty());
     }
 }
@@ -453,23 +473,26 @@ fn installing_m_bootloader_cuts_the_configuration_short() {
     assert!(matches!(fm1_on(damaged).plan_bootloader(None, None), Err(Error::Refused(_))));
 }
 
+/// A stock bootloader: the bundled one without its identity, at the size older
+/// versions were.
+fn stock_boot() -> Vec<u8> {
+    let (boot, _) = bundled_bootloader(&FM1).unwrap();
+    let mut b = with_version(&older_size(boot), "x");
+    let offset = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
+    let size = u16::from_le_bytes(b[2..4].try_into().unwrap()) as usize;
+    b[offset + 0x40..offset + 0x48].fill(0);
+    let crc = crc16(&b[offset..offset + size]);
+    b[12..14].copy_from_slice(&crc.to_le_bytes());
+    let crc = crc16(&b[..14]);
+    b[14..16].copy_from_slice(&crc.to_le_bytes());
+    assert!(bootloader_identity(&b).is_none());
+    b
+}
+
 #[test]
 fn the_stock_bootloader_comes_with_the_packages_whole_boot_area() {
-    let (boot, _) = bundled_bootloader(&FM1).unwrap();
-    // a stock bootloader: no identity; a package with its own full configuration
-    let stock = with_version(&older_size(boot), "x");
-    let stock: Vec<u8> = {
-        let mut b = stock;
-        let offset = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
-        let size = u16::from_le_bytes(b[2..4].try_into().unwrap()) as usize;
-        b[offset + 0x40..offset + 0x48].fill(0);
-        let crc = crc16(&b[offset..offset + size]);
-        b[12..14].copy_from_slice(&crc.to_le_bytes());
-        let crc = crc16(&b[..14]);
-        b[14..16].copy_from_slice(&crc.to_le_bytes());
-        b
-    };
-    assert!(bootloader_identity(&stock).is_none());
+    // a stock bootloader; a package with its own full configuration
+    let stock = stock_boot();
     let mut with_config = with_boot_area(fm1_016_image(), &stock);
     with_config[0x3938 + 40..0x3938 + 48].copy_from_slice(b"SYS_CLK\0");
     with_config[0x3938 + 48..0x3938 + 52].copy_from_slice(&360_000_000u32.to_le_bytes());

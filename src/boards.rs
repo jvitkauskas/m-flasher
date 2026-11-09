@@ -19,8 +19,10 @@ pub struct Board {
     pub models: &'static [&'static str],
     /// JEDEC ID seen on units (a hint only), and the chip m-bootloader has run on.
     pub flash_id: u32,
-    /// Other JEDEC IDs seen on units (a hint too); m-bootloader has not run on them.
+    /// Other JEDEC IDs seen on units (a hint too), newer chips; m-bootloader runs on them too.
     pub other_flash: &'static [u32],
+    /// The key held while switching the unit on for m-bootloader's recovery menu.
+    pub menu_key: &'static str,
     /// Per-unit data, never written from another unit's image.
     pub factory: &'static [(usize, usize)],
 }
@@ -34,6 +36,7 @@ pub static FM1: Board = Board {
     models: &["FM-1", "MiniFM"],
     flash_id: 0x856014,
     other_flash: &[0xB36014], // UCUN UC25HQ80, in units sold from late 2026
+    menu_key: "PLAY",
     factory: &[KEY_MAC],
 };
 pub static SMK37: Board = Board {
@@ -43,13 +46,14 @@ pub static SMK37: Board = Board {
     models: &["SMK-37 Pro", "SMK-37 Elite"],
     flash_id: 0xEB6014,
     other_flash: &[],
+    menu_key: "SEQ PLAY",
     factory: &[(0xC1000, 0xC2000), KEY_MAC], // USRTRIM: factory key and pad calibration
 };
 pub static BOARDS: [&Board; 2] = [&FM1, &SMK37];
 
 /// Whether m-bootloader has been run on this flash chip.
 pub fn flash_tested(id: u32) -> bool {
-    BOARDS.iter().any(|b| b.flash_id == id)
+    BOARDS.iter().any(|b| b.flash_id == id || b.other_flash.contains(&id))
 }
 
 const SMK_TRIM_MARKER: (usize, &[u8]) = (0xC1224, b"trimdat\0");

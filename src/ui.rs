@@ -64,6 +64,8 @@ pub struct App {
     /// When an inactive key was last pressed: the LCD's bottom line, which
     /// says what is needed, flashes for a moment.
     nudged: f64,
+    /// m-bootloader was accepted when recommended: its review opens once planned.
+    review_when_planned: bool,
     fonts: crate::fonts::Fonts,
 }
 
@@ -76,7 +78,7 @@ impl App {
         fonts.install(&cc.egui_ctx);
         // MFLASHER_DIALOG=about opens the About dialog at start (for screenshots)
         let dialog = if std::env::var("MFLASHER_DIALOG").as_deref() == Ok("about") { Dialog::About } else { Dialog::None };
-        App { ctl: Controller::new(cc.egui_ctx.clone()), dialog, noise: None, nudged: f64::NEG_INFINITY, fonts }
+        App { ctl: Controller::new(cc.egui_ctx.clone()), dialog, noise: None, nudged: f64::NEG_INFINITY, review_when_planned: false, fonts }
     }
 }
 
@@ -137,7 +139,15 @@ impl eframe::App for App {
         let noise = self.noise.get_or_insert_with(|| noise_texture(&ctx)).clone();
         let dev = st.device.as_ref();
         let busy = st.busy;
-        let modal = self.dialog != Dialog::None || st.alert.is_some();
+        if self.review_when_planned && !st.busy {
+            // planned (installing m-bootloader, chosen when it was recommended): review it as any write
+            if st.mode == Mode::Bootloader && st.phase == Phase::Ready && st.alert.is_none()
+                && st.plan.as_ref().is_some_and(|p| p.ready) && self.dialog == Dialog::None {
+                self.dialog = Dialog::Review;
+            }
+            self.review_when_planned = false;
+        }
+        let modal = self.dialog != Dialog::None || st.alert.is_some() || st.suggest_boot.is_some();
         let active = !modal && !busy; // clicks allowed
         let clicked = |id: &str, r: Rect| -> (bool, bool) {
             let resp = ui.interact(r, ui.id().with(id), Sense::click());
@@ -657,6 +667,14 @@ impl App {
             let mut t2 = text.clone();
             if let Some(f) = t2.get_mut(0..1) { f.make_ascii_uppercase(); }
             (t, t2.split('\n').map(|l| (l.to_string(), c)).collect(), vec![("OK", 1)])
+        } else if let (Some(menu_key), Dialog::None) = (st.suggest_boot, &self.dialog) {
+            ("INSTALL M-BOOTLOADER?", vec![
+                ("This unit has M-VAVE's stock bootloader. We recommend installing m-bootloader: if a firmware ever \
+                  fails to start, you can still reinstall one without opening the unit.".into(), INK),
+                (format!("For its recovery menu, hold {menu_key} while switching the unit on."), INK),
+                ("Only the bootloader is replaced. You review the change before anything is written, and a full \
+                  backup is saved first.".into(), DIM),
+            ], vec![("NO", 6), ("YES", 5)])
         } else {
             match self.dialog {
                 Dialog::None => return,
@@ -722,11 +740,13 @@ impl App {
         }
         let mut x = 1116.0;
         for (label, code) in keys.iter().rev() {
-            let w = if *code == 2 { 254.0 } else { 150.0 };
+            // the key we recommend: lit
+            let primary = matches!(code, 2 | 5);
+            let w = if primary { 254.0 } else { 150.0 };
             x -= w;
             let r = board.r(x, top + h - 78.0, w, 52.0);
             let resp = ui.interact(r, ui.id().with(("dlg", *label)), Sense::click());
-            key(p, r, *code == 2, resp.hovered(), false);
+            key(p, r, primary, resp.hovered(), false);
             let t = if *code == 2 { format!("WRITE {} SECTORS", st.plan.as_ref().map(|p| p.count).unwrap_or(0)) } else { label.to_string() };
             p.text(x + w / 2.0, top + h - 52.0, Align2::CENTER_CENTER, &t, "cond", 22.0, KEYINK, 1.6);
             if resp.clicked() {
@@ -737,6 +757,11 @@ impl App {
                         2 => ctl.confirm(),
                         3 => ctl.set_model("fm1"),
                         4 => ctl.set_model("smk37"),
+                        5 => {
+                            ctl.answer_boot_suggestion(true);
+                            self.review_when_planned = true;
+                        }
+                        6 => ctl.answer_boot_suggestion(false),
                         _ => {}
                     }
                     self.dialog = Dialog::None;
@@ -745,6 +770,9 @@ impl App {
             x -= 16.0;
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) && st.alert.is_none() {
+            if self.dialog == Dialog::None && st.suggest_boot.is_some() {
+                ctl.answer_boot_suggestion(false);
+            }
             self.dialog = Dialog::None;
         }
     }
