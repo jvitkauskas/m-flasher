@@ -100,7 +100,8 @@ stock firmware takes about half a minute).
 
 On a unit with M-VAVE's stock bootloader, the window recommends installing
 m-bootloader once it has read the flash, once per unit: with it, a unit whose
-firmware doesn't start can be reflashed without opening it. **Yes** shows the
+firmware doesn't start can be reflashed from its keys, with no extra hardware to
+force download mode. **Yes** shows the
 change for review, as any write; **No** leaves the unit as it is, and
 **Flash bootloader** installs it later.
 

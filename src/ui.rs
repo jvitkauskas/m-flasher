@@ -670,7 +670,7 @@ impl App {
         } else if let (Some(menu_key), Dialog::None) = (st.suggest_boot, &self.dialog) {
             ("INSTALL M-BOOTLOADER?", vec![
                 ("This unit has M-VAVE's stock bootloader. We recommend installing m-bootloader: if a firmware ever \
-                  fails to start, you can still reinstall one without opening the unit.".into(), INK),
+                  fails to start, you can still reinstall one without buying extra hardware to force download mode.".into(), INK),
                 (format!("For its recovery menu, hold {menu_key} while switching the unit on."), INK),
                 ("Only the bootloader is replaced. You review the change before anything is written, and a full \
                   backup is saved first.".into(), DIM),
