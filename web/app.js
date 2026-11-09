@@ -2,7 +2,7 @@
 // The page: finds a unit, says what it is, and offers what can be done with it.
 import { BOOT_AREA, appFilesStatus, crc32, hex, packageImage, sha256Hex } from "./lib/formats.js";
 import { FINISH, Link, Unit, UnitLost, findPorts } from "./lib/protocol.js";
-import { analyse, describePlan, flashTested, planFirmware, planRestore } from "./lib/unit.js";
+import { analyse, describePlan, flashTested, flashText, planFirmware, planRestore } from "./lib/unit.js";
 import { loadManifest, loadPackage, hasOwnUpdater, variantOf } from "./lib/assets.js";
 
 const TOOL = "m-flasher web 0.1";
@@ -499,7 +499,7 @@ function render() {
     fact(facts, "Firmware", a.firmwareText);
     fact(facts, "Firmware state", a.appStatusText);
     fact(facts, "Chip key", hex(state.info.key, 4));
-    fact(facts, "Flash chip", hex(state.info.jedec, 6));
+    fact(facts, "Flash chip", flashText(state.info.jedec));
     fact(facts, "Unit ID", state.info.unitId);
     if (!a.board) notes.push("The model is uncertain, so this page won't write anything to this unit.");
     if (!flashTested(state.info.jedec)) notes.push(`This flash chip (${hex(state.info.jedec, 6)}) has had little testing with m-bootloader.`);

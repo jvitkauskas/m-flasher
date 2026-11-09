@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import * as f from "../lib/formats.js";
 import { hasOwnUpdater, variantOf } from "../lib/assets.js";
-import { CHIP_KEY, FM1, SMK37, analyse, planFirmware, planRestore } from "../lib/unit.js";
+import { CHIP_KEY, FM1, SMK37, analyse, flashText, planFirmware, planRestore } from "../lib/unit.js";
 
 const DATA = process.env.FLASHER_TEST_DATA ?? "";
 const need = (name) => {
@@ -102,4 +102,11 @@ test("only firmware with its own updater is kept from the update route", () => {
   for (const id of ["SMK-37_930", "ota-SMK-37_930", "SMK-37_901"]) assert.ok(hasOwnUpdater(id), id);
   for (const id of ["SMK-37 Pro_016", "SMK-37 Pro_900", "SMK-37 Elite_920", "SMK-37+VA_102", "FM-1_918", "ota-SMK-37 Pro_900", null]) assert.ok(!hasOwnUpdater(id), id);
   assert.equal(variantOf("SMK-37"), null);
+});
+
+test("the FM-1's two flash chips are told apart", () => {
+  assert.equal(flashText(0x856014), "0x856014 (old)");
+  assert.equal(flashText(0xb36014), "0xB36014 (new)");
+  assert.equal(flashText(0xeb6014), "0xEB6014", "the SMK-37 has one");
+  assert.equal(flashText(0xef4014), "0xEF4014");
 });
