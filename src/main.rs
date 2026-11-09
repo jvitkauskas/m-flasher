@@ -27,6 +27,11 @@ fn main() {
     if args.first().map(String::as_str) == Some(scsi::macos::USB_HELPER) {
         std::process::exit(scsi::macos::usb_helper());
     }
+    // Windows: the administrator helper the app starts to reach the unit
+    #[cfg(windows)]
+    if args.first().map(String::as_str) == Some(scsi::helper::SCSI_HELPER) {
+        std::process::exit(scsi::helper::scsi_helper(&args));
+    }
     if !args.is_empty() {
         #[cfg(windows)]
         unsafe {

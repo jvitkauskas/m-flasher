@@ -3,7 +3,8 @@
 //!
 //! Linux: the SCSI generic driver (/dev/sgN, SG_IO). Windows:
 //! \\.\PhysicalDriveN with IOCTL_SCSI_PASS_THROUGH_DIRECT, which needs
-//! administrator rights; only the disks on the unit's USB IDs are looked at.
+//! administrator rights (an administrator helper, see windows_helper.rs);
+//! only the disks on the unit's USB IDs are looked at.
 //! macOS (and Linux built with the `usb` feature): USB
 //! Bulk-Only Transport through libusb, see usb.rs. Ported from jl-uboot-tool's scsiio (MIT, (c) 2023
 //! Andrey Grigoryev).
@@ -232,34 +233,35 @@ mod imp {
             // SAFETY: plain FFI call.
             let e = unsafe { GetLastError() };
             if e == ERROR_ACCESS_DENIED {
-                return Err(ScsiError::NeedsAdmin(format!("access to {path} denied: run M-Flasher as administrator")));
+                return Err(ScsiError::NeedsAdmin(format!("access to {path} denied: it needs administrator rights")));
             }
             return Err(ScsiError::Failed(format!("cannot open {path}: error {e}")));
         }
         Ok(h)
     }
 
-    pub struct Device {
+    /// The unit, opened by this process: an administrator's.
+    pub struct Disk {
         h: HANDLE,
     }
 
     // SAFETY: the handle is only used by one thread at a time (behind &mut self).
-    unsafe impl Send for Device {}
+    unsafe impl Send for Disk {}
 
-    impl Device {
-        pub fn open(path: &str) -> Result<Device, ScsiError> {
-            Ok(Device { h: open_raw(path, GENERIC_READ | GENERIC_WRITE)? })
+    impl Disk {
+        pub fn open(path: &str) -> Result<Disk, ScsiError> {
+            Ok(Disk { h: open_raw(path, GENERIC_READ | GENERIC_WRITE)? })
         }
     }
 
-    impl Drop for Device {
+    impl Drop for Disk {
         fn drop(&mut self) {
             // SAFETY: h came from CreateFileW.
             unsafe { CloseHandle(self.h) };
         }
     }
 
-    impl Scsi for Device {
+    impl Scsi for Disk {
         fn execute(&mut self, cdb: &[u8], data: Data) -> Result<usize, ScsiError> {
             let mut s: SptdWithSense = unsafe { std::mem::zeroed() };
             s.sptd.length = std::mem::size_of::<Sptd>() as u16;
@@ -297,6 +299,45 @@ mod imp {
             }
             // the driver sets it to the number of bytes transferred
             Ok(s.sptd.data_transfer_length as usize)
+        }
+    }
+
+    pub enum Device {
+        /// Run as administrator: the unit itself.
+        Direct(Disk),
+        /// Through the administrator helper.
+        Helper,
+    }
+
+    impl Device {
+        /// The app tries again only once the unit is reconnected (it may have
+        /// asked for administrator rights already), which the error says.
+        pub fn open(path: &str) -> Result<Device, ScsiError> {
+            let r = match Disk::open(path) {
+                Err(ScsiError::NeedsAdmin(_)) => super::helper::open(path).map(|_| Device::Helper),
+                r => r.map(Device::Direct),
+            };
+            r.map_err(|e| match e {
+                ScsiError::Failed(m) => ScsiError::Failed(format!("{m}: reconnect the unit to try again")),
+                e => e,
+            })
+        }
+    }
+
+    impl Scsi for Device {
+        fn execute(&mut self, cdb: &[u8], data: Data) -> Result<usize, ScsiError> {
+            match self {
+                Device::Direct(d) => d.execute(cdb, data),
+                Device::Helper => super::helper::execute(cdb, data),
+            }
+        }
+    }
+
+    impl Drop for Device {
+        fn drop(&mut self) {
+            if let Device::Helper = self {
+                super::helper::close();
+            }
         }
     }
 
@@ -414,6 +455,10 @@ mod imp {
         out.into_iter().map(|(_, path, name)| (path, name)).collect()
     }
 }
+
+#[cfg(windows)]
+#[path = "windows_helper.rs"]
+pub mod helper;
 
 // --------------------------------------------------- macOS: USB directly ---
 

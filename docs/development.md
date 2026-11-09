@@ -17,7 +17,9 @@ once before giving up with the ID the chip now gives.
 How the unit is reached differs by system:
 
 - **Windows:** SCSI pass-through to the disk (`SCSI_PASS_THROUGH_DIRECT`),
-  which needs administrator rights.
+  which needs administrator rights. The app runs as the user and starts a
+  helper as administrator (UAC) once it finds a unit, passing it each
+  command over a named pipe, as on macOS (`src/windows_helper.rs`).
 - **Linux:** the SCSI generic driver (`SG_IO`), or libusb with
   `--features usb`.
 - **macOS:** it does not pass such commands through, so the app takes the
