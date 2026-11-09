@@ -7,7 +7,7 @@
 //! compared (and rewritten once on a mismatch), and the image is saved as a
 //! backup before the first write of a session.
 
-use crate::boards::{Analysis, BOARDS, Board, CHIP_KEY, FLASH_SIZE, flash_tested};
+use crate::boards::{Analysis, BOARDS, Board, CHIP_KEY, FLASH_SIZE, flash_tested, flash_text};
 use crate::formats::{
     AppStatus, BOOT_AREA, Package, SECTOR, app_files_status, crc32, app_table, bankcb_check, bootloader_identity,
     build_boot_area, build_short_boot_area, config_cut_short, config_sys_clk, reads_config, stored_bootloader,
@@ -155,7 +155,7 @@ impl<F: Flash> Session<F> {
         if dev.chip_key() != CHIP_KEY {
             log(format!("Note: chip key 0x{:04X} (0x{CHIP_KEY:04X} expected)", dev.chip_key()));
         }
-        log(format!("Flash chip 0x{:06X}", dev.flash_id()));
+        log(format!("Flash chip {}", flash_text(dev.flash_id())));
         log("Reading the flash".into());
         let started = std::time::Instant::now();
         let a = dev.read(0, FLASH_SIZE, &mut |d| progress(d, FLASH_SIZE))?;
