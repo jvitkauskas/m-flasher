@@ -364,6 +364,12 @@ impl Controller {
                     *c.declined.lock().unwrap() = Some(path.clone());
                 }
             })?;
+            // an earlier failure to connect (rights refused, say) is over now
+            c.with(|s| {
+                if s.alert.as_ref().is_some_and(|(_, t)| t.starts_with("USB error during connecting")) {
+                    s.alert = None;
+                }
+            });
             let conn = Connection::start(&path, dev, &mut log)?;
             let backup_dir = c.shared.lock().unwrap().backup_dir.clone();
             let unit = Session::open(conn, backup_dir, &mut log, &mut |d, t| c.with(|s| s.pct = d as f32 / t as f32));
@@ -398,10 +404,6 @@ impl Controller {
                 s.phase = Phase::Ready;
                 s.stage[0] = Stage::Done;
                 s.pct = 0.0;
-                // an earlier failure to connect (rights refused, say) is over now
-                if s.alert.as_ref().is_some_and(|(_, t)| t.starts_with("USB error during connecting")) {
-                    s.alert = None;
-                }
             });
             c.replan_now();
             Ok(())
