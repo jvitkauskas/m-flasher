@@ -10,10 +10,16 @@ protected your PC: choose **More info → Run anyway**.
 Microsoft Defender sometimes takes a new release for a threat and deletes
 it, often under a name ending in `!ml` (a guess by its machine-learning
 model). Each release is reported to Microsoft as a false alarm, which
-usually clears it within a few days. Until then, check the zip came from
-this repository's releases, then in **Windows Security → Virus & threat
-protection → Protection history** pick the M-Flasher entry and choose
-**Actions → Restore**. Please open an issue with the threat's name.
+usually clears it within a few days: then update Defender and download it
+again. If you can't wait and the zip came from this repository's releases,
+open **Windows Security → Virus & threat protection → Protection history**
+and pick the M-Flasher entry:
+
+- **Threat quarantined**: **Actions → Restore**. Defender finds it again: in
+  the new **Threat found - action needed** entry choose **Allow on device**.
+- **Threat blocked**: **Actions → Allow**, then download the zip again.
+
+Please open an issue with the threat's name.
 
 **macOS** (11 or newer, Apple silicon and Intel). Open
 `M-Flasher-…-macos.dmg` and drag M-Flasher to Applications. The first time

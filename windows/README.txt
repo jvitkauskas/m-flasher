@@ -21,11 +21,15 @@ Microsoft Defender
 New versions are reported to Microsoft as false alarms when they are
 released, which usually takes a few days to reach Defender. Until then:
 
-- Check the zip came from https://github.com/jvitkauskas/m-flasher/releases.
-- Windows Security > Virus & threat protection > Protection history: pick
-  the M-Flasher entry and choose Actions > Restore (or Allow on device).
-- Or wait a day or two, update Defender (Windows Update) and download
-  again.
+- The safest: wait a day or two, update Defender (Windows Update) and
+  download the zip again.
+- Or, if the zip came from
+  https://github.com/jvitkauskas/m-flasher/releases, open Windows
+  Security > Virus & threat protection > Protection history and pick the
+  M-Flasher entry:
+  - "Threat quarantined": Actions > Restore. Defender finds it again: in
+    the new "Threat found - action needed" entry choose Allow on device.
+  - "Threat blocked": Actions > Allow, then download the zip again.
 
 Please tell us the name Defender gave the threat (for example
 "Trojan:Win32/Wacatac.B!ml") in an issue, so it can be reported.
