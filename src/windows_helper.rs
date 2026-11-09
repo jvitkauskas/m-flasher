@@ -75,7 +75,7 @@ static HELPER: Mutex<Option<Helper>> = Mutex::new(None);
 impl Helper {
     /// Starts the helper after Windows asks for administrator rights.
     fn start() -> Result<Helper, ScsiError> {
-        let failed = |what: String| ScsiError::Failed(format!("cannot start the administrator helper ({what}): reconnect the unit to try again"));
+        let failed = |what: String| ScsiError::Failed(format!("cannot start the administrator helper: {what}"));
         // SAFETY: plain FFI call.
         let app = unsafe { GetCurrentProcessId() };
         // unguessable, so no other program has it ready; FIRST_PIPE_INSTANCE refuses one that does

@@ -310,11 +310,17 @@ mod imp {
     }
 
     impl Device {
+        /// The app tries again only once the unit is reconnected (it may have
+        /// asked for administrator rights already), which the error says.
         pub fn open(path: &str) -> Result<Device, ScsiError> {
-            match Disk::open(path) {
+            let r = match Disk::open(path) {
                 Err(ScsiError::NeedsAdmin(_)) => super::helper::open(path).map(|_| Device::Helper),
                 r => r.map(Device::Direct),
-            }
+            };
+            r.map_err(|e| match e {
+                ScsiError::Failed(m) => ScsiError::Failed(format!("{m}: reconnect the unit to try again")),
+                e => e,
+            })
         }
     }
 
