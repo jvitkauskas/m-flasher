@@ -3,7 +3,8 @@
 //!
 //! Linux: the SCSI generic driver (/dev/sgN, SG_IO). Windows:
 //! \\.\PhysicalDriveN with IOCTL_SCSI_PASS_THROUGH_DIRECT, which needs
-//! administrator rights. macOS (and Linux built with the `usb` feature): USB
+//! administrator rights; only the disks on the unit's USB IDs are looked at.
+//! macOS (and Linux built with the `usb` feature): USB
 //! Bulk-Only Transport through libusb, see usb.rs. Ported from jl-uboot-tool's scsiio (MIT, (c) 2023
 //! Andrey Grigoryev).
 
@@ -11,6 +12,10 @@ use std::fmt;
 
 pub const VENDOR: &str = "WL82";
 pub const PRODUCT: &str = "UBOOT1.00";
+#[cfg(windows)]
+const USB_VID: u16 = 0x4C4A;
+#[cfg(windows)]
+const USB_PID: u16 = 0x8057;
 #[cfg(any(windows, all(target_os = "linux", not(feature = "usb"))))]
 const TIMEOUT_S: u32 = 10;
 
@@ -177,9 +182,15 @@ mod imp {
 mod imp {
     use super::*;
     use std::ffi::c_void;
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        CM_Get_Device_IDW, CM_Get_Parent, CR_SUCCESS, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, HDEVINFO, MAX_DEVICE_ID_LEN,
+        SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA, SetupDiDestroyDeviceInfoList,
+        SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW, SetupDiGetDeviceInterfaceDetailW,
+    };
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
     use windows_sys::Win32::System::IO::DeviceIoControl;
+    use windows_sys::Win32::System::Ioctl::{GUID_DEVINTERFACE_DISK, IOCTL_STORAGE_GET_DEVICE_NUMBER, STORAGE_DEVICE_NUMBER};
 
     const IOCTL_SCSI_PASS_THROUGH_DIRECT: u32 = 0x4D014;
     const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x2D1400;
@@ -318,17 +329,89 @@ mod imp {
         (raw.len() >= 20).then(|| (field(12), field(16)))
     }
 
+    /// The disk's number N, for \\.\PhysicalDriveN.
+    fn disk_number(path: &str) -> Option<u32> {
+        let h = open_raw(path, 0).ok()?;
+        let mut n = STORAGE_DEVICE_NUMBER::default();
+        let mut got = 0u32;
+        // SAFETY: n is valid for the call.
+        let ok = unsafe {
+            DeviceIoControl(h, IOCTL_STORAGE_GET_DEVICE_NUMBER, std::ptr::null(), 0,
+                &mut n as *mut STORAGE_DEVICE_NUMBER as *mut c_void, std::mem::size_of::<STORAGE_DEVICE_NUMBER>() as u32,
+                &mut got, std::ptr::null_mut())
+        };
+        // SAFETY: h came from CreateFileW.
+        unsafe { CloseHandle(h) };
+        (ok != 0).then_some(n.DeviceNumber)
+    }
+
+    /// Whether the device node or one above it is the unit's USB device
+    /// (USB\VID_4C4A&PID_8057\..., or an interface of it).
+    fn on_unit_usb(mut node: u32) -> bool {
+        let id = format!("VID_{:04X}&PID_{:04X}", super::USB_VID, super::USB_PID);
+        for _ in 0..8 {
+            let mut buf = [0u16; MAX_DEVICE_ID_LEN as usize + 1];
+            // SAFETY: buf holds MAX_DEVICE_ID_LEN characters and the NUL.
+            if unsafe { CM_Get_Device_IDW(node, buf.as_mut_ptr(), buf.len() as u32, 0) } == CR_SUCCESS {
+                let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                if String::from_utf16_lossy(&buf[..end]).to_ascii_uppercase().contains(&id) {
+                    return true;
+                }
+            }
+            let mut parent = 0u32;
+            // SAFETY: parent is valid for the call.
+            if unsafe { CM_Get_Parent(&mut parent, node, 0) } != CR_SUCCESS {
+                return false;
+            }
+            node = parent;
+        }
+        false
+    }
+
+    /// The units in download mode. Only disks on the unit's USB IDs are
+    /// opened: probing every \\.\PhysicalDriveN, the system disk too, every
+    /// few seconds is what disk-wiping malware does, and antivirus watches for it.
     pub fn find_devices() -> Vec<(String, String)> {
-        let mut out = vec![];
-        for n in 0..64 {
-            let path = format!(r"\\.\PhysicalDrive{n}");
-            if let Some((v, p)) = query_ids(&path) {
+        let mut out: Vec<(u32, String, String)> = vec![];
+        // SAFETY: plain FFI call; the list is destroyed below.
+        let set = unsafe {
+            SetupDiGetClassDevsW(&GUID_DEVINTERFACE_DISK, std::ptr::null(), std::ptr::null_mut(), DIGCF_PRESENT | DIGCF_DEVICEINTERFACE)
+        };
+        if set == INVALID_HANDLE_VALUE as HDEVINFO {
+            return vec![];
+        }
+        for i in 0.. {
+            let mut iface = SP_DEVICE_INTERFACE_DATA { cbSize: std::mem::size_of::<SP_DEVICE_INTERFACE_DATA>() as u32, ..Default::default() };
+            // SAFETY: iface is valid for the call, its size set.
+            if unsafe { SetupDiEnumDeviceInterfaces(set, std::ptr::null(), &GUID_DEVINTERFACE_DISK, i, &mut iface) } == 0 {
+                break;
+            }
+            // SP_DEVICE_INTERFACE_DETAIL_DATA_W: cbSize, then the path; u32s keep it aligned
+            let mut detail = vec![0u32; 512];
+            detail[0] = std::mem::size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>() as u32;
+            let mut info = SP_DEVINFO_DATA { cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
+            // SAFETY: detail is 2048 bytes, as passed, with cbSize set; info is valid with its size set.
+            let ok = unsafe {
+                SetupDiGetDeviceInterfaceDetailW(set, &iface, detail.as_mut_ptr() as *mut SP_DEVICE_INTERFACE_DETAIL_DATA_W,
+                    (detail.len() * 4) as u32, std::ptr::null_mut(), &mut info)
+            };
+            if ok == 0 || !on_unit_usb(info.DevInst) {
+                continue;
+            }
+            // SAFETY: the path follows cbSize, NUL-terminated within the buffer.
+            let wide = unsafe { std::slice::from_raw_parts((detail.as_ptr() as *const u16).add(2), detail.len() * 2 - 2) };
+            let end = wide.iter().position(|&c| c == 0).unwrap_or(wide.len());
+            let iface_path = String::from_utf16_lossy(&wide[..end]);
+            if let (Some((v, p)), Some(n)) = (query_ids(&iface_path), disk_number(&iface_path)) {
                 if v == VENDOR && p == PRODUCT {
-                    out.push((path, format!("{v} {p} (disk {n})")));
+                    out.push((n, format!(r"\\.\PhysicalDrive{n}"), format!("{v} {p} (disk {n})")));
                 }
             }
         }
-        out
+        // SAFETY: set came from SetupDiGetClassDevsW.
+        unsafe { SetupDiDestroyDeviceInfoList(set) };
+        out.sort();
+        out.into_iter().map(|(_, path, name)| (path, name)).collect()
     }
 }
 
