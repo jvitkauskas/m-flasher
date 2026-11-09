@@ -114,6 +114,12 @@ area. The app warns before such a cross-flash, because the unit then reports
 itself as the other model and M-UPGRADE only accepts that model's packages. The
 backup made before the write brings the original firmware back.
 
+**Old and new FM-1s:** FM-1s sold from late 2026 have another flash chip, shown
+under **Device info** as `0xB36014 (new)`; earlier ones show `0x856014 (old)`.
+Firmware written before the new chip came may not work fully on it: some keep
+settings only until the unit is switched off. Before installing a custom firmware
+on a new FM-1, check that it supports the new chip.
+
 **`BAD CONFIG` on the unit's screen:** m-bootloader before 1.3 rejects the boot
 configuration of FM-1 016, which M-UPGRADE writes when it installs 016, and stops
 at its menu on every start. **Boot app** in the menu still starts the firmware.

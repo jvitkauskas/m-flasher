@@ -4,7 +4,7 @@
 //! smk37-016.fwsc, fm1-015.fwsc, fm1-016.fwsc, minifm-016.fwsc); they are
 //! skipped without it.
 
-use crate::boards::{Analysis, CHIP_KEY, FLASH_SIZE, FM1, SMK37};
+use crate::boards::{Analysis, CHIP_KEY, FLASH_SIZE, FM1, SMK37, flash_text};
 use crate::formats::{AppStatus, BOOT_AREA, BOOT_AT, CONFIG_AT, CONFIG_KEY, CONFIG_SIZE, Package, app_files_status, app_table, boot_table, bootloader_identity,
                      build_boot_area, crc16, enc, stored_bootloader};
 use crate::jl::Flash;
@@ -333,6 +333,16 @@ fn the_newer_fm1_flash_chip_identifies_the_model() {
     assert_eq!(a.board, Some(&FM1));
     assert!(a.certain, "the layout and the chip agree");
     assert!(!Analysis::new(&fm1_016_image(), Some(0xEF4014), CHIP_KEY).certain);
+}
+
+#[test]
+fn the_fm1s_two_flash_chips_are_told_apart() {
+    assert_eq!(flash_text(0x856014), "0x856014 (old)");
+    assert_eq!(flash_text(0xB36014), "0xB36014 (new)");
+    assert_eq!(flash_text(0xEB6014), "0xEB6014", "the SMK-37 has one");
+    assert_eq!(flash_text(0xEF4014), "0xEF4014");
+    let a = Analysis::new(&fm1_016_image(), Some(0xB36014), CHIP_KEY);
+    assert!(a.evidence.iter().any(|e| e.2 == "flash chip 0xB36014 (new)"), "{:?}", a.evidence);
 }
 
 #[test]

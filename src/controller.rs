@@ -3,7 +3,7 @@
 //! background threads. Everything the window shows is in `Shared`, which the
 //! window copies each frame; the threads change it and ask for a repaint.
 
-use crate::boards::{BOARDS, CHIP_KEY};
+use crate::boards::{BOARDS, CHIP_KEY, flash_text};
 use crate::cli::default_backup_dir;
 use crate::formats::SECTOR;
 use crate::jl::{Connection, Flash};
@@ -807,7 +807,7 @@ fn device_view(u: &Unit) -> DeviceView {
             crate::boards::BootKind::Open => a.bootloader_text.split(" (").next().unwrap_or_default().to_string(),
             _ => a.bootloader_text.clone(),
         },
-        flash: format!("0x{:06X}", u.dev.flash_id()),
+        flash: flash_text(u.dev.flash_id()),
         chip_key: format!("0x{:04X}", u.dev.chip_key()),
         chip_key_ok: u.dev.chip_key() == CHIP_KEY,
         evidence: a.evidence.iter().map(|e| e.2.clone()).collect(),
