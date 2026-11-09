@@ -3,8 +3,10 @@
 ## Installing
 
 **Windows** (10 or 11). Extract `M-Flasher-…-windows.zip` and run
-`M-Flasher.exe`. It asks for administrator rights, which it needs to talk to
-the unit. The app is not signed, so the first time Windows may say it
+`M-Flasher.exe`. When it finds the unit in download mode, Windows asks to let
+it make changes: it needs administrator rights to talk to the unit, and only
+for that, in a helper of its own. Cancelled, it asks again once the unit is
+reconnected. The app is not signed, so the first time Windows may say it
 protected your PC: choose **More info → Run anyway**.
 
 Microsoft Defender sometimes takes a new release for a threat and deletes
@@ -157,7 +159,8 @@ the model is uncertain), `--backup-dir DIR`, `--yes`, and `--restart` (restore,
 firmware and bootloader: start the unit once written). Changes are shown first
 and need a typed `yes`, or `--yes`.
 
-- Windows: run `M-Flasher.exe` from an administrator prompt.
+- Windows: `M-Flasher.exe info`; Windows asks for administrator rights the
+  same way, or run it from an administrator prompt.
 - macOS: `/Applications/M-Flasher.app/Contents/MacOS/M-Flasher info`, from
   Terminal; it asks for the password the same way, or run it with `sudo`. Not
   over SSH: macOS asks about the removable volume only on the screen.

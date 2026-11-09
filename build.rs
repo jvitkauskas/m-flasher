@@ -1,6 +1,7 @@
-// Windows: the icon, and a manifest asking for administrator rights (needed
-// for SCSI pass-through to the download-mode disk) and declaring the app
-// DPI-aware, as resources of the executable.
+// Windows: the icon, and a manifest running the app as the user (an
+// administrator helper does the SCSI pass-through to the download-mode disk,
+// see src/windows_helper.rs) and declaring it DPI-aware, as resources of the
+// executable.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=windows/m-flasher.ico");
@@ -10,7 +11,7 @@ fn main() {
     let manifest = || {
         use embed_manifest::manifest::{DpiAwareness, ExecutionLevel};
         embed_manifest::new_manifest("M-Flasher")
-            .requested_execution_level(ExecutionLevel::RequireAdministrator)
+            .requested_execution_level(ExecutionLevel::AsInvoker)
             .dpi_awareness(DpiAwareness::PerMonitorV2)
     };
     let mut res = winresource::WindowsResource::new();

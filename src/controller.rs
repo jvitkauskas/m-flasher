@@ -8,7 +8,7 @@ use crate::cli::default_backup_dir;
 use crate::formats::SECTOR;
 use crate::jl::{Connection, Flash};
 use crate::ops::{Error, Event, Plan, Session, bundled_bootloader};
-use crate::scsi::{Device, find_devices};
+use crate::scsi::{Device, ScsiError, find_devices};
 use crate::sectormap::{Region, sector_map};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -164,6 +164,10 @@ pub struct Controller {
     shared: Arc<Mutex<Shared>>,
     unit: Arc<Mutex<Option<Unit>>>,
     plan: Arc<Mutex<Option<Plan>>>,
+    /// The unit M-Flasher had no rights to open (the system's dialog for
+    /// administrator rights cancelled, Linux's udev rule missing): not tried,
+    /// nor asked about, again every scan, only once it is reconnected.
+    declined: Arc<Mutex<Option<String>>>,
     ctx: egui::Context,
 }
 
@@ -206,6 +210,7 @@ impl Controller {
             })),
             unit: Arc::new(Mutex::new(None)),
             plan: Arc::new(Mutex::new(None)),
+            declined: Arc::new(Mutex::new(None)),
             ctx,
         };
         c.log(format!("M-Flasher {} started · m-bootloader {open_version} bundled", env!("CARGO_PKG_VERSION")));
@@ -270,12 +275,19 @@ impl Controller {
             if !self.shared.lock().unwrap().busy {
                 let devs = find_devices();
                 let connected = self.unit.lock().unwrap().as_ref().map(|u| u.dev.path().to_string());
+                let declined = {
+                    let mut d = self.declined.lock().unwrap();
+                    if d.as_ref().is_some_and(|p| !devs.iter().any(|x| &x.0 == p)) {
+                        *d = None;
+                    }
+                    d.clone()
+                };
                 match &connected {
                     Some(p) if !devs.iter().any(|d| &d.0 == p) => {
                         self.log("The unit is gone (unplugged or switched off)".into());
                         self.drop_unit();
                     }
-                    None if devs.len() == 1 => self.connect(devs[0].0.clone()),
+                    None if devs.len() == 1 && declined.as_ref() != Some(&devs[0].0) => self.connect(devs[0].0.clone()),
                     _ => {}
                 }
                 let multiple = connected.is_none() && devs.len() > 1;
@@ -347,7 +359,12 @@ impl Controller {
             });
             c.log(format!("Unit found in download mode: {path}"));
             let mut log = |m: String| c.log(m);
-            let conn = Connection::start(&path, Device::open(&path)?, &mut log)?;
+            let dev = Device::open(&path).inspect_err(|e| {
+                if let ScsiError::NeedsAdmin(_) = e {
+                    *c.declined.lock().unwrap() = Some(path.clone());
+                }
+            })?;
+            let conn = Connection::start(&path, dev, &mut log)?;
             let backup_dir = c.shared.lock().unwrap().backup_dir.clone();
             let unit = Session::open(conn, backup_dir, &mut log, &mut |d, t| c.with(|s| s.pct = d as f32 / t as f32));
             let unit = match unit {

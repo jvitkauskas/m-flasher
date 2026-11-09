@@ -52,7 +52,7 @@ static HELPER: Mutex<Option<Helper>> = Mutex::new(None);
 impl Helper {
     /// Starts the helper after the system's password dialog.
     fn start() -> Result<Helper, ScsiError> {
-        let refused = || ScsiError::NeedsAdmin("M-Flasher needs an administrator's password to reach the unit".into());
+        let refused = || ScsiError::NeedsAdmin("M-Flasher needs an administrator's password to reach the unit: reconnect it to be asked again".into());
         let exe = std::env::current_exe().map_err(|e| ScsiError::Failed(e.to_string()))?;
         let path = CString::new(exe.as_os_str().as_bytes()).map_err(|e| ScsiError::Failed(e.to_string()))?;
         let arg = CString::new(USB_HELPER).unwrap();
