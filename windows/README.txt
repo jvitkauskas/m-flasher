@@ -36,9 +36,7 @@ released, which usually takes a few days to reach Defender. Until then:
 Please tell us the name Defender gave the threat (for example
 "Trojan:Win32/Wacatac.B!ml") in an issue, so it can be reported.
 
-M-Flasher is free. Signing it would let it build a reputation with
-Windows, for fewer warnings and false alarms over time, and costs money
-every year. To help pay for it:
+M-Flasher is free. To support it:
 https://ko-fi.com/jvitkauskas or https://github.com/sponsors/jvitkauskas
 
 More: https://github.com/jvitkauskas/m-flasher

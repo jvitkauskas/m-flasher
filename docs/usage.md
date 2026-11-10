@@ -7,8 +7,7 @@
 it make changes: it needs administrator rights to talk to the unit, and only
 for that, in a helper of its own. Cancelled, it asks again once the unit is
 reconnected. The app is not signed, so the first time Windows may say it
-protected your PC: choose **More info → Run anyway**. (Signing costs money
-every year: [donations](../README.md#support) would pay for it.)
+protected your PC: choose **More info → Run anyway**.
 
 Microsoft Defender sometimes takes a new release for a threat and deletes
 it, often under a name ending in `!ml` (a guess by its machine-learning
