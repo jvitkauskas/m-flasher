@@ -12,6 +12,7 @@ use std::time::Duration;
 pub const VID: u16 = 0x4C4A;
 pub const PID: u16 = 0x8057;
 const TIMEOUT: Duration = Duration::from_secs(10);
+const DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 const CBW_SIGNATURE: u32 = 0x4342_5355; // "USBC"
 const CSW_SIGNATURE: u32 = 0x5342_5355; // "USBS"
 
@@ -131,7 +132,26 @@ impl Device {
             use std::hash::{BuildHasher, Hasher};
             std::collections::hash_map::RandomState::new().build_hasher().finish() as u32
         };
-        Ok(Device { handle, iface, ep_in, ep_out, in_packet, tag, detached })
+        let mut d = Device { handle, iface, ep_in, ep_out, in_packet, tag, detached };
+        d.drain();
+        Ok(d)
+    }
+
+    /// Reads away what the unit still has to send from before M-Flasher took
+    /// it over (the status of the disk driver's last command, say), so that
+    /// the first command starts in step. Normally there is nothing, and the
+    /// first read just times out.
+    fn drain(&mut self) {
+        let mut buf = vec![0u8; self.in_packet.max(64) * 8];
+        for _ in 0..4 {
+            match self.handle.read_bulk(self.ep_in, &mut buf, DRAIN_TIMEOUT) {
+                Ok(_) | Err(rusb::Error::Overflow) => {}
+                Err(rusb::Error::Pipe) => {
+                    let _ = self.handle.clear_halt(self.ep_in);
+                }
+                Err(_) => break,
+            }
+        }
     }
 
     /// One read of the data phase into `buf`. Read whole packets: asking
