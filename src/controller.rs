@@ -137,7 +137,6 @@ pub struct Shared {
     // the user's choices
     pub mode: Mode,
     pub files: HashMap<&'static str, PathBuf>,
-    pub wipe: bool,
     pub with_boot: bool,
     /// Restore: the unit keeps its own bootloader.
     pub keep_boot: bool,
@@ -221,9 +220,6 @@ impl Controller {
                 open_version: open_version.clone(),
                 mode: Mode::Firmware,
                 files: HashMap::new(),
-                // the erase-settings box starts ticked: custom firmwares do not always read each
-                // other's settings and pairings correctly
-                wipe: true,
                 with_boot: false,
                 keep_boot: false,
                 boot_source: BootSource::Open,
@@ -495,11 +491,11 @@ impl Controller {
     // ---- planning ----
 
     fn replan_now(&self) {
-        let (mode, files, wipe, with_boot, keep_boot, src) = {
+        let (mode, files, with_boot, keep_boot, src) = {
             let s = self.shared.lock().unwrap();
             // (choices change under this lock)
             self.planned.store(self.choices.load(Ordering::SeqCst), Ordering::SeqCst);
-            (s.mode, s.files.clone(), s.wipe, s.with_boot, s.keep_boot, s.boot_source)
+            (s.mode, s.files.clone(), s.with_boot, s.keep_boot, s.boot_source)
         };
         let guard = self.unit.lock().unwrap();
         let Some(unit) = guard.as_ref() else { return };
@@ -539,7 +535,7 @@ impl Controller {
             },
             Mode::Firmware => match read("firmware") {
                 None => return need(self, "Choose a firmware package (.fwsc)"),
-                Some(d) => d.and_then(|d| unit.plan_firmware(&d, with_boot, wipe)),
+                Some(d) => d.and_then(|d| unit.plan_firmware(&d, with_boot)),
             },
             Mode::Bootloader => match src {
                 BootSource::Open => unit.plan_bootloader(None, None),
@@ -627,11 +623,6 @@ impl Controller {
             self.replan();
         }
         taken
-    }
-
-    pub fn set_wipe(&self, v: bool) {
-        self.choose(|s| s.wipe = v);
-        self.replan();
     }
 
     pub fn set_with_boot(&self, v: bool) {

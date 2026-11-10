@@ -28,7 +28,6 @@ m-flasher \- back up, restore and reinstall the firmware of M-VAVE FM-1 and SMK-
 .B firmware
 .I package.fwsc
 .RB [ \-\-with\-bootloader ]
-.RB [ \-\-wipe\-settings ]
 .br
 .B m-flasher
 .RI [ options ]
@@ -92,11 +91,10 @@ Write the parts of a backup that differ from the unit;
 leaves the unit's bootloader (the boot area) as it is.
 .TP
 .BI firmware " package.fwsc"
-Install the firmware from an M-VAVE package;
+Install the firmware from an M-VAVE package; nothing outside the package is
+erased.
 .B \-\-with\-bootloader
-also writes its stock bootloader,
-.B \-\-wipe\-settings
-erases the settings and Bluetooth pairings.
+also writes its stock bootloader.
 .TP
 .B bootloader
 Install m-bootloader for the identified model, or the stock one from a

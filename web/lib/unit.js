@@ -197,7 +197,7 @@ export function planRestore(session, data, backupUnit) {
 }
 
 /** Installing firmware from a package, as M-Flasher's window does. */
-export function planFirmware(session, raw, wipeSettings) {
+export function planFirmware(session, raw) {
   const { flash, analysis, key } = session;
   const board = analysis.board;
   if (!board) throw refuse("the model of this unit is not certain, so nothing can be written from here");
@@ -222,17 +222,5 @@ export function planFirmware(session, raw, wipeSettings) {
   target.set(pkgFlash.subarray(BOOT_AREA), BOOT_AREA);
   for (const [a, b] of board.keep) target.set(flash.subarray(a, b), a);
   notes.push(`Installs ${pkg.identity} (${rangesText([[BOOT_AREA, pkgFlash.length]])}). The bootloader stays as it is.`);
-  if (wipeSettings) {
-    for (const e of appTable(padded, key)) {
-      if ((e.name !== "VM" && e.name !== "BTIF") || (e.attr !== 0x12 && e.attr !== 0x92) || !e.len || e.addr % SECTOR || e.addr + e.len > FLASH_SIZE) continue;
-      if (board.factory.some(([a, b]) => a < e.addr + e.len && e.addr < b)) throw refuse(`the package declares ${e.name} over factory data`);
-      if (inAny(board.keep, e.addr)) {
-        notes.push(`${e.name} is left as it is: MIDI mode keeps it.`);
-        continue;
-      }
-      target.fill(0xff, e.addr, e.addr + e.len);
-      notes.push(`Erases ${e.name} (${rangesText([[e.addr, e.addr + e.len]])}): ${e.name === "VM" ? "settings" : "Bluetooth pairings"}`);
-    }
-  }
   return makePlan(`Install firmware ${pkg.identity}`, flash, target, board, notes, warnings);
 }

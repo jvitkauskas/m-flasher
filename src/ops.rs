@@ -348,7 +348,7 @@ impl<F: Flash> Session<F> {
         Plan::new("Restore a backup".into(), &self.flash, target, allowed, notes, warnings)
     }
 
-    pub fn plan_firmware(&self, raw: &[u8], with_bootloader: bool, wipe_settings: bool) -> Result<Plan, Error> {
+    pub fn plan_firmware(&self, raw: &[u8], with_bootloader: bool) -> Result<Plan, Error> {
         let pkg = Package::parse(raw).map_err(|e| Error::Refused(e.0))?;
         let board = self.need_board()?;
         if !board.models.contains(&pkg.model()) {
@@ -389,39 +389,10 @@ impl<F: Flash> Session<F> {
         let end = pkg.flash.len();
         let mut target = self.flash.clone();
         target[start..end].copy_from_slice(&pkg.flash[start..end]);
-        let mut allowed = vec![(start, end)];
+        let allowed = vec![(start, end)];
         notes.push(format!("Installs {} ({}).", pkg.identity, ranges_text(&allowed)));
         if with_bootloader {
             notes.push("Also puts back the package's (stock) bootloader.".into());
-        }
-        if wipe_settings {
-            // what the package itself installs: the boot area, the app's file
-            // table, its files and the code area it protects (PRCT, from 0: as
-            // the flash map draws the firmware). A package can declare its
-            // settings anywhere, and erasing them must never erase those.
-            let table = app_table(&padded, key);
-            let installed = table.iter().filter_map(|e| match e.attr {
-                0x82 => Some(BOOT_AREA + e.addr as usize + e.len as usize),
-                _ if e.name == "PRCT" && e.addr == 0 && e.len as usize <= FLASH_SIZE => Some(e.len as usize),
-                _ => None,
-            }).fold(BOOT_AREA + 32 * table.len(), usize::max);
-            for e in &table {
-                let (a, n) = (e.addr as usize, e.len as usize);
-                if (e.name == "VM" || e.name == "BTIF") && (e.attr == 0x12 || e.attr == 0x92) && n > 0
-                    && a % SECTOR == 0 && a + n <= FLASH_SIZE {
-                    if board.factory.iter().any(|&(fa, fb)| fa < a + n && a < fb) {
-                        return refuse(format!("the package declares {} over factory data", e.name));
-                    }
-                    if a < installed {
-                        return refuse(format!("the package declares {} (0x{a:05X}) over the bootloader or its own firmware \
-                                               (up to 0x{:05X}): erasing it would erase those", e.name, installed - 1));
-                    }
-                    target[a..a + n].fill(0xFF);
-                    allowed.push((a, a + n));
-                    notes.push(format!("Erases {} (0x{a:05X}-0x{:05X}): {}", e.name, a + n - 1,
-                                       if e.name == "VM" { "settings" } else { "Bluetooth pairings" }));
-                }
-            }
         }
         Plan::new(format!("Install firmware {}", pkg.identity), &self.flash, target, allowed, notes, warnings)
     }

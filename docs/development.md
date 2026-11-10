@@ -74,7 +74,7 @@ The optional test data includes `fm1-016.fwsc`, the vendor's
 [FM-1 016 package](https://yms-file-store.oss-cn-hongkong.aliyuncs.com/software/firmware/FM-1.fwsc)
 (SHA-256 `d017fb65e70aca97ee29d944470c3515a74581df5c0576bf70de917c7b2b61d5`).
 The URL may change with later releases. The tests check its three app files
-(`app.bin`, `cfg_tool.bin`, `DX7.bin`), upgrades and downgrades, settings wipes,
+(`app.bin`, `cfg_tool.bin`, `DX7.bin`), upgrades, reinstalls and downgrades,
 and stock/m-bootloader replacement against simulated NOR flash. Synthetic
 tests cover the new layout and boot configuration placement without this file.
 
