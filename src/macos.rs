@@ -104,12 +104,13 @@ impl Helper {
                 return Err(refused());
             }
             // the helper's standard input and output, both ways
-            let fd = libc::dup(libc::fileno(pipe));
+            // (a copy that the programs the app starts do not inherit)
+            let fd = libc::fcntl(libc::fileno(pipe), libc::F_DUPFD_CLOEXEC, 0);
+            let error = std::io::Error::last_os_error();
             libc::fclose(pipe);
             if fd < 0 {
-                return Err(ScsiError::Failed(format!("cannot talk to the USB helper: {}", std::io::Error::last_os_error())));
+                return Err(ScsiError::Failed(format!("cannot talk to the USB helper: {error}")));
             }
-            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
             Ok(Helper { pipe: File::from_raw_fd(fd) })
         }
     }

@@ -311,7 +311,8 @@ fn minifm_016_vendor_package() {
 fn erasing_settings_never_erases_the_bootloader_or_the_firmware() {
     let s = fm1_session(fm1_016_image(), "wipe-range");
     // a package may declare its settings anywhere: over the boot area, or over its own files
-    for vm_at in [0, BOOT_AREA] {
+    // (0xA8000: above its files, inside the code area it protects)
+    for vm_at in [0, BOOT_AREA, 0xA8000] {
         let raw = package("FM-1_016", &image_016_vm(b"FM-1_016\0", vm_at)[..0xA9000]);
         match s.plan_firmware(&raw, false, true) {
             Err(Error::Refused(t)) => assert!(t.contains("over the bootloader or its own firmware"), "{t}"),

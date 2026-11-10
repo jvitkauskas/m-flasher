@@ -397,12 +397,15 @@ impl<F: Flash> Session<F> {
         }
         if wipe_settings {
             // what the package itself installs: the boot area, the app's file
-            // table and its files. A package can declare its settings anywhere,
-            // and erasing them must never erase those.
+            // table, its files and the code area it protects (PRCT, from 0: as
+            // the flash map draws the firmware). A package can declare its
+            // settings anywhere, and erasing them must never erase those.
             let table = app_table(&padded, key);
-            let installed = table.iter().filter(|e| e.attr == 0x82)
-                .map(|e| BOOT_AREA + e.addr as usize + e.len as usize)
-                .fold(BOOT_AREA + 32 * table.len(), usize::max);
+            let installed = table.iter().filter_map(|e| match e.attr {
+                0x82 => Some(BOOT_AREA + e.addr as usize + e.len as usize),
+                _ if e.name == "PRCT" && e.addr == 0 && e.len as usize <= FLASH_SIZE => Some(e.len as usize),
+                _ => None,
+            }).fold(BOOT_AREA + 32 * table.len(), usize::max);
             for e in &table {
                 let (a, n) = (e.addr as usize, e.len as usize);
                 if (e.name == "VM" || e.name == "BTIF") && (e.attr == 0x12 || e.attr == 0x92) && n > 0
