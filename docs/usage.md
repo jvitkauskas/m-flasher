@@ -7,7 +7,8 @@
 it make changes: it needs administrator rights to talk to the unit, and only
 for that, in a helper of its own. Cancelled, it asks again once the unit is
 reconnected. The app is not signed, so the first time Windows may say it
-protected your PC: choose **More info → Run anyway**.
+protected your PC: choose **More info → Run anyway**. (Signing costs money
+every year: [donations](../README.md#support) would pay for it.)
 
 Microsoft Defender sometimes takes a new release for a threat and deletes
 it, often under a name ending in `!ml` (a guess by its machine-learning
@@ -26,7 +27,8 @@ Please open an issue with the threat's name.
 **macOS** (11 or newer, Apple silicon and Intel). Open
 `M-Flasher-…-macos.dmg` and drag M-Flasher to Applications. The first time
 macOS blocks it, as it is not signed with an Apple certificate: **System
-Settings → Privacy & Security → Open Anyway**. When the app finds the unit:
+Settings → Privacy & Security → Open Anyway**. ([Donations](../README.md#support)
+would pay for the certificate.) When the app finds the unit:
 
 - it asks for your password in the system's dialog: only an administrator may
   take a USB device from macOS's disk driver;

@@ -69,6 +69,10 @@ pub struct App {
     fonts: crate::fonts::Fonts,
 }
 
+/// Where donations for code signing go (the About dialog).
+const SPONSORS: &str = "https://github.com/sponsors/jvitkauskas";
+const KO_FI: &str = "https://ko-fi.com/jvitkauskas";
+
 /// How long the LCD's bottom line flashes after an inactive key is pressed (s).
 const NUDGE: f64 = 1.2;
 
@@ -706,7 +710,10 @@ impl App {
                       (OFL).".into(), DIM),
                     (String::new(), INK),
                     ("Unofficial: not affiliated with M-VAVE or JieLi.".into(), DIM),
-                ], vec![("CLOSE", 0)]),
+                    (String::new(), INK),
+                    ("M-Flasher is free. It isn't signed yet, which is why Windows and macOS ask before it first \
+                      starts; signing costs money every year, and donations would pay for it.".into(), INK),
+                ], vec![("GITHUB SPONSORS", 7), ("KO-FI", 8), ("CLOSE", 0)]),
                 Dialog::Model => {
                     let mut b = vec![
                         ("The model could not be identified for certain. Writing the wrong model's firmware or".to_string(), INK),
@@ -745,7 +752,7 @@ impl App {
         for (label, code) in keys.iter().rev() {
             // the key we recommend: lit
             let primary = matches!(code, 2 | 5);
-            let w = if primary { 254.0 } else { 150.0 };
+            let w = if primary { 254.0 } else { (p.measure(label, "cond", 22.0, 1.6) + 48.0).max(150.0) };
             x -= w;
             let r = board.r(x, top + h - 78.0, w, 52.0);
             let resp = ui.interact(r, ui.id().with(("dlg", *label)), Sense::click());
@@ -755,6 +762,9 @@ impl App {
             if resp.clicked() {
                 if st.alert.is_some() {
                     ctl.dismiss();
+                } else if matches!(code, 7 | 8) {
+                    // a link: the dialog stays
+                    ctl.open_link(if *code == 7 { SPONSORS } else { KO_FI });
                 } else {
                     match code {
                         2 => ctl.confirm(),

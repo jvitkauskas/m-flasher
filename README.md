@@ -27,7 +27,7 @@ the unit is broken. For Windows, macOS and Linux.
 
 1. Download the package for your system from the [releases](../../releases)
    and follow its short instructions. The apps are not signed, so the first
-   start needs one extra confirmation.
+   start needs one extra confirmation ([why](#support)).
 2. Put the unit in **download mode** and connect it with a USB data cable:
    - with the unit running normally (M-VAVE's firmware or Felucca), just
      connect it: M-Flasher finds it on USB MIDI and its **DOWNLOAD MODE**
@@ -48,6 +48,18 @@ a recovery menu for when the firmware does not start.
   the command line
 - [Safety](docs/safety.md): what is checked before and after every write
 - [How it works](docs/development.md): the protocol, the source, building
+
+## Support
+
+M-Flasher is free. Its apps aren't signed yet: that's why Windows and macOS
+ask for an extra confirmation the first time, and partly why Microsoft Defender
+sometimes takes a new release for a threat. Signing them costs money every
+year: $99 for Apple's developer program, for macOS, and a code signing
+certificate for Windows, around €100–300. Donations go to these first; what's
+left after a year's signing goes to the next.
+
+[Sponsor on GitHub](https://github.com/sponsors/jvitkauskas) ·
+[Donate on Ko-fi](https://ko-fi.com/jvitkauskas)
 
 ## Credits and license
 
