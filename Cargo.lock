@@ -1406,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "m-flasher"
-version = "0.9.4"
+version = "0.10.0"
 dependencies = [
  "chrono",
  "eframe",
