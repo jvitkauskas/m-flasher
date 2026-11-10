@@ -183,6 +183,8 @@ pub struct Controller {
     /// the plan was made from: a plan from older choices is never written.
     choices: Arc<AtomicU64>,
     planned: Arc<AtomicU64>,
+    /// The file dialogs open: no write starts while a file is being chosen.
+    picking: Arc<AtomicU64>,
     ctx: egui::Context,
 }
 
@@ -235,6 +237,7 @@ impl Controller {
             failures: Arc::new(Mutex::new((String::new(), 0))),
             choices: Arc::new(AtomicU64::new(0)),
             planned: Arc::new(AtomicU64::new(0)),
+            picking: Arc::new(AtomicU64::new(0)),
             ctx,
         };
         c.log(format!("M-Flasher {} started · m-bootloader {open_version} bundled", env!("CARGO_PKG_VERSION")));
@@ -666,7 +669,11 @@ impl Controller {
     /// Opens a file dialog in a thread; the choice is planned when it returns.
     pub fn choose_file(&self, kind: FileKind) {
         let c = self.clone();
-        let dir = self.shared.lock().unwrap().backup_dir.clone();
+        // counted with the lock a write is admitted under, until the choice is in
+        let dir = self.with(|s| {
+            self.picking.fetch_add(1, Ordering::SeqCst);
+            s.backup_dir.clone()
+        });
         std::thread::spawn(move || {
             let d = rfd::FileDialog::new();
             let d = match kind {
@@ -675,9 +682,19 @@ impl Controller {
                 FileKind::Stock => d.set_title("Choose an official package (its stock bootloader is used)").add_filter("Firmware packages", &["fwsc"]),
                 FileKind::BootFile => d.set_title("Choose a bootloader file").add_filter("Bootloaders", &["boot"]),
             };
-            if let Some(p) = d.add_filter("All files", &["*"]).pick_file() {
+            let picked = d.add_filter("All files", &["*"]).pick_file();
+            if let Some(p) = &picked {
                 c.log(format!("{} chosen", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
-                c.choose(|s| { s.files.insert(file_key(kind), p); });
+            }
+            let chosen = picked.is_some();
+            c.with(|s| {
+                if let Some(p) = picked {
+                    c.choices.fetch_add(1, Ordering::SeqCst);
+                    s.files.insert(file_key(kind), p);
+                }
+                c.picking.fetch_sub(1, Ordering::SeqCst);
+            });
+            if chosen {
                 c.replan();
             }
         });
@@ -720,10 +737,12 @@ impl Controller {
         // for the user to review
         // (Checked as the write is admitted: choices change with the same lock
         // held, so none slips in between, and once it runs nothing is planned.)
-        let mut stale = false;
+        let (mut stale, mut picking) = (false, false);
         let fresh = |_: &Shared| {
+            // a file dialog still open may change the choice: it is closed first
+            picking = self.picking.load(Ordering::SeqCst) != 0;
             stale = self.choices.load(Ordering::SeqCst) != self.planned.load(Ordering::SeqCst);
-            !stale
+            !picking && !stale
         };
         self.work_if("writing", fresh, move |c| {
             let Some(plan) = c.plan.lock().unwrap().clone().filter(|p| !p.sectors.is_empty()) else { return Ok(()) };
@@ -819,7 +838,9 @@ impl Controller {
             *c.plan.lock().unwrap() = None;
             Ok(())
         });
-        if stale {
+        if picking {
+            self.log("A file is still being chosen: close its window first, nothing written".into());
+        } else if stale {
             self.log("The choices changed after this plan was made: planning again, nothing written".into());
             self.replan();
         }
