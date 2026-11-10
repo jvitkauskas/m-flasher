@@ -205,7 +205,7 @@ impl Device {
         }
         match csw[12] {
             0 => Ok(moved),
-            1 => Err(ScsiError::Failed(format!("command {name} failed (status 1)"))),
+            1 => Err(ScsiError::Refused(format!("command {name} failed (status 1)"))),
             s => Err(ScsiError::Failed(format!("command {name}: phase error (status {s})"))),
         }
     }
@@ -219,9 +219,9 @@ fn csw_tag(b: &[u8]) -> Option<u32> {
 impl super::Scsi for Device {
     fn execute(&mut self, cdb: &[u8], data: Data) -> Result<usize, ScsiError> {
         let r = self.transfer(cdb, data);
-        // a failed command (status 1) leaves the transport in order; anything
-        // else is reset, for the next command (or its retry) to start clean
-        if matches!(&r, Err(ScsiError::Failed(s)) if !s.ends_with("(status 1)")) {
+        // a refused command (status 1) leaves the transport in order; a failed
+        // transfer is reset, for the next command (or its retry) to start clean
+        if matches!(&r, Err(ScsiError::Failed(_))) {
             self.reset_recovery();
         }
         r

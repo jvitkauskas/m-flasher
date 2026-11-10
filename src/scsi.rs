@@ -24,13 +24,17 @@ const TIMEOUT_S: u32 = 10;
 pub enum ScsiError {
     /// No permission to open the device (Linux: udev rule or root; Windows: administrator).
     NeedsAdmin(String),
+    /// The transfer went wrong: sending it again may work.
     Failed(String),
+    /// The device got the command and answered it with a failure status (one it
+    /// doesn't know, say): the same answer every time.
+    Refused(String),
 }
 
 impl fmt::Display for ScsiError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ScsiError::NeedsAdmin(s) | ScsiError::Failed(s) => f.write_str(s),
+            ScsiError::NeedsAdmin(s) | ScsiError::Failed(s) | ScsiError::Refused(s) => f.write_str(s),
         }
     }
 }
@@ -149,10 +153,10 @@ mod imp {
                 return Err(ScsiError::Failed(format!("SG_IO failed: {}", std::io::Error::last_os_error())));
             }
             if h.info & 1 != 0 {
-                return Err(ScsiError::Failed(format!(
-                    "command {} failed: status 0x{:02x}, host 0x{:02x}, driver 0x{:02x}",
-                    cmd_name(cdb), h.status, h.host_status, h.driver_status
-                )));
+                let text = format!("command {} failed: status 0x{:02x}, host 0x{:02x}, driver 0x{:02x}",
+                                   cmd_name(cdb), h.status, h.host_status, h.driver_status);
+                // a status from the device over a transfer that went through
+                return Err(if h.status != 0 && h.host_status == 0 { ScsiError::Refused(text) } else { ScsiError::Failed(text) });
             }
             Ok(len.saturating_sub(h.resid.max(0) as usize))
         }
@@ -295,7 +299,7 @@ mod imp {
                 return Err(ScsiError::Failed(format!("command {} failed: error {e}", cmd_name(cdb))));
             }
             if s.sptd.scsi_status != 0 {
-                return Err(ScsiError::Failed(format!("command {} failed: status 0x{:02x}", cmd_name(cdb), s.sptd.scsi_status)));
+                return Err(ScsiError::Refused(format!("command {} failed: status 0x{:02x}", cmd_name(cdb), s.sptd.scsi_status)));
             }
             // the driver sets it to the number of bytes transferred
             Ok(s.sptd.data_transfer_length as usize)

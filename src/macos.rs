@@ -34,6 +34,7 @@ const CLOSE: u8 = 4;
 const OK: u8 = 0;
 const FAILED: u8 = 1;
 const NEEDS_ADMIN: u8 = 2;
+const REFUSED: u8 = 3;
 
 fn is_root() -> bool {
     // SAFETY: a plain libc call without arguments
@@ -118,6 +119,7 @@ fn ask(request: &[u8], start: bool) -> Result<Vec<u8>, ScsiError> {
     match helper.as_mut().unwrap().call(request) {
         Ok((OK, payload)) => Ok(payload),
         Ok((NEEDS_ADMIN, m)) => Err(ScsiError::NeedsAdmin(String::from_utf8_lossy(&m).into())),
+        Ok((REFUSED, m)) => Err(ScsiError::Refused(String::from_utf8_lossy(&m).into())),
         Ok((_, m)) => Err(ScsiError::Failed(String::from_utf8_lossy(&m).into())),
         Err(e) => {
             *helper = None;
@@ -282,6 +284,7 @@ pub fn usb_helper() -> i32 {
             Ok(p) => (OK, p),
             Err(ScsiError::NeedsAdmin(m)) => (NEEDS_ADMIN, m.into_bytes()),
             Err(ScsiError::Failed(m)) => (FAILED, m.into_bytes()),
+            Err(ScsiError::Refused(m)) => (REFUSED, m.into_bytes()),
         };
         let mut frame = vec![status];
         frame.extend((payload.len() as u32).to_le_bytes());
