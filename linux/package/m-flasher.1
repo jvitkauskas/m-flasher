@@ -94,7 +94,8 @@ leaves the unit's bootloader (the boot area) as it is.
 Install the firmware from an M-VAVE package; nothing outside the package is
 erased.
 .B \-\-with\-bootloader
-also writes its stock bootloader.
+also writes its stock bootloader, from an official package; a boot area that
+can't start the unit, as custom packages often carry, is refused.
 .TP
 .B bootloader
 Install m-bootloader for the identified model, or the stock one from a

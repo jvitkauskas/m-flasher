@@ -14,6 +14,11 @@ backup can repair.
 - A firmware package must be for the connected model, and its firmware must
   decrypt with this unit's chip key. The same goes for a package the stock
   bootloader is put back from, as its boot area replaces the unit's.
+- A package's boot area is written only if it can start the unit: a bootloader
+  that passes its checksum, and the whole configuration it reads, with the chip
+  key intact. Custom firmware packages often carry only a stand-in there, which
+  their own installers never write; installing it would leave the unit dark,
+  repairable only from download mode.
 - Installing m-bootloader on a flash chip it has not been tested with brings a
   warning.
 - Installing m-bootloader is refused if the unit's chip key is damaged: it is

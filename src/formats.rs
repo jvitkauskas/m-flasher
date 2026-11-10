@@ -358,6 +358,36 @@ pub fn stored_bootloader(flash: &[u8]) -> Option<Vec<u8>> {
     (crc16(&boot) == e.data_crc).then_some(boot)
 }
 
+/// Whether a package's boot area can start a unit once written in place of the
+/// unit's: a bootloader that passes its checksum, and the configuration it reads,
+/// whole, after it in the boot area and with the chip-key record intact.
+/// Custom firmware packages may carry only a stand-in here, which their own
+/// installers never write: Felucca's builder puts JieLi's SDK bootloader there
+/// with a checksum that fails and a configuration of only the chip key. A unit
+/// given that boot area does not start, and only download mode can repair it.
+pub fn check_boot_area(flash: &[u8]) -> Result<(), FormatError> {
+    let boot = stored_bootloader(flash).ok_or_else(|| FormatError("its bootloader is damaged or missing".into()))?;
+    let t = boot_table(flash);
+    let Some(e) = t.iter().find(|e| e.name == "isd_config.ini") else {
+        return err("it has no boot configuration");
+    };
+    let (at, len) = (e.addr as usize, e.len as usize);
+    if at < BOOT_AT + boot.len() || len < CONFIG_KEY || len > BOOT_AREA.saturating_sub(at) {
+        return err("its boot configuration is not where the bootloader can read it");
+    }
+    let config = &flash[at..at + len];
+    if crc16(config) != e.data_crc {
+        return err("its boot configuration is damaged");
+    }
+    if crc16(&config[..32]) != u16le(config, 32) {
+        return err("its chip-key record is damaged");
+    }
+    if reads_config(&boot) && config_cut_short(flash) {
+        return err("its boot configuration is incomplete for its bootloader");
+    }
+    Ok(())
+}
+
 /// flash's boot area with its bootloader replaced. Keeps the flash header, the
 /// file table and isd_config (the unit's own); the bootloader's entry gets the
 /// new length and CRC, the space up to isd_config is filled with 0xFF. If a
