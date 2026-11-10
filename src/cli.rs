@@ -385,7 +385,9 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         }
         "restore" => {
             let f = pos.get(1).ok_or_else(|| Error::Refused(USAGE.into()))?;
-            s.plan_restore(&read(f)?, crate::ops::backup_unit_id(std::path::Path::new(f)).as_deref(), keep_boot)?
+            let data = read(f)?;
+            crate::ops::check_backup_file(std::path::Path::new(f), &data)?;
+            s.plan_restore(&data, crate::ops::backup_unit_id(std::path::Path::new(f)).as_deref(), keep_boot)?
         }
         "firmware" => s.plan_firmware(&read(pos.get(1).ok_or_else(|| Error::Refused(USAGE.into()))?)?, with_boot, wipe)?,
         _ => match (stock, file) {
@@ -420,13 +422,24 @@ fn confirm_and_apply<F: crate::jl::Flash>(s: &mut Session<F>, plan: &Plan, yes: 
             return Ok(false);
         }
     }
-    let total = plan.sectors.len() * crate::formats::SECTOR;
-    let mut done = 0;
-    s.apply(plan, &mut |e| {
-        if let crate::ops::Event::Verify(a) = e {
-            done = done.max(a);
-            let _ = total;
+    // the share of the plan's sectors written, on one line between the log's
+    let total = plan.sectors.len();
+    let line_open = std::cell::Cell::new(false);
+    let result = s.apply(plan, &mut |e| {
+        if let crate::ops::Event::Write(a) = e {
+            let done = plan.sectors.iter().filter(|&&s| s + crate::formats::SECTOR <= a).count();
+            eprint!("\r  {:3}%", 100 * done / total);
+            line_open.set(true);
         }
-    }, &mut |m| println!("{m}"))?;
+    }, &mut |m| {
+        if line_open.replace(false) {
+            eprintln!();
+        }
+        println!("{m}")
+    });
+    if line_open.get() {
+        eprintln!();
+    }
+    result?;
     Ok(true)
 }

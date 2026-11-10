@@ -12,6 +12,7 @@ use crate::scsi::{Device, ScsiError, find_devices};
 use crate::sectormap::{Region, sector_map};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -176,10 +177,21 @@ pub struct Controller {
     declined: Arc<Mutex<Option<String>>>,
     /// The units m-bootloader was recommended for (unit ID, or path): once each.
     suggested: Arc<Mutex<Vec<String>>>,
+    /// The unit that last failed to connect, and how many times in a row.
+    failures: Arc<Mutex<(String, u32)>>,
+    /// Counts the user's choices (mode, files, options, model), and the count
+    /// the plan was made from: a plan from older choices is never written.
+    choices: Arc<AtomicU64>,
+    planned: Arc<AtomicU64>,
+    /// The file dialogs open: no write starts while a file is being chosen.
+    picking: Arc<AtomicU64>,
     ctx: egui::Context,
 }
 
 use eframe::egui;
+
+/// Failed connections in a row before a unit is left alone until reconnected.
+const CONNECT_TRIES: u32 = 3;
 
 fn now() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
@@ -222,6 +234,10 @@ impl Controller {
             plan: Arc::new(Mutex::new(None)),
             declined: Arc::new(Mutex::new(None)),
             suggested: Arc::new(Mutex::new(vec![])),
+            failures: Arc::new(Mutex::new((String::new(), 0))),
+            choices: Arc::new(AtomicU64::new(0)),
+            planned: Arc::new(AtomicU64::new(0)),
+            picking: Arc::new(AtomicU64::new(0)),
             ctx,
         };
         c.log(format!("M-Flasher {} started · m-bootloader {open_version} bundled", env!("CARGO_PKG_VERSION")));
@@ -253,7 +269,15 @@ impl Controller {
 
     /// Run f in a thread unless something is running; errors become alerts.
     fn work(&self, name: &'static str, f: impl FnOnce(&Controller) -> Result<(), Error> + Send + 'static) {
-        if !self.with(|s| !std::mem::replace(&mut s.busy, true)) {
+        self.work_if(name, |_| true, f);
+    }
+
+    /// As `work`, but only if `admit` agrees. It is asked with what the
+    /// window shows locked, in the same step that marks the work as running:
+    /// no choice can change between its answer and the start.
+    fn work_if(&self, name: &'static str, admit: impl FnOnce(&Shared) -> bool,
+               f: impl FnOnce(&Controller) -> Result<(), Error> + Send + 'static) {
+        if !self.with(|s| !s.busy && admit(s) && { s.busy = true; true }) {
             return;
         }
         let c = self.clone();
@@ -276,7 +300,20 @@ impl Controller {
                 }
             }
             c.with(|s| s.busy = false);
+            // a choice made while this ran was not planned (one thing runs at a time)
+            if c.choices.load(Ordering::SeqCst) != c.planned.load(Ordering::SeqCst)
+                && c.shared.lock().unwrap().phase == Phase::Ready {
+                c.replan();
+            }
         });
+    }
+
+    /// Changes the user's choices, and counts the change.
+    fn choose<R>(&self, f: impl FnOnce(&mut Shared) -> R) -> R {
+        self.with(|s| {
+            self.choices.fetch_add(1, Ordering::SeqCst);
+            f(s)
+        })
     }
 
     // ---- connection ----
@@ -290,6 +327,10 @@ impl Controller {
                     let mut d = self.declined.lock().unwrap();
                     if d.as_ref().is_some_and(|p| !devs.iter().any(|x| &x.0 == p)) {
                         *d = None;
+                    }
+                    let mut f = self.failures.lock().unwrap();
+                    if f.1 > 0 && !devs.iter().any(|x| x.0 == f.0) {
+                        *f = (String::new(), 0);
                     }
                     d.clone()
                 };
@@ -361,73 +402,94 @@ impl Controller {
         });
     }
 
+    /// Connects; a unit that fails to three times in a row is left alone until
+    /// it is reconnected, rather than tried (its loader started, its flash
+    /// read) every scan for as long as it stays plugged in.
     fn connect(&self, path: String) {
         self.work("connecting", move |c| {
-            c.with(|s| {
-                s.phase = Phase::Connecting;
-                s.stage = [Stage::Active, Stage::Idle, Stage::Idle, Stage::Idle];
-                s.pct = 0.0;
-                s.marks.clear();
-            });
-            c.log(format!("Unit found in download mode: {path}"));
-            let mut log = |m: String| c.log(m);
-            let dev = Device::open(&path).inspect_err(|e| {
-                // Windows: any failure may have come after the system's dialog
-                // (the helper not starting), which every scan would show again
-                if cfg!(windows) || matches!(e, ScsiError::NeedsAdmin(_)) {
-                    *c.declined.lock().unwrap() = Some(path.clone());
+            let r = c.connect_now(&path);
+            let mut f = c.failures.lock().unwrap();
+            match &r {
+                Ok(()) => *f = (String::new(), 0),
+                Err(_) => {
+                    *f = if f.0 == path { (path.clone(), f.1 + 1) } else { (path.clone(), 1) };
+                    if f.1 >= CONNECT_TRIES && c.declined.lock().unwrap().as_ref() != Some(&path) {
+                        *c.declined.lock().unwrap() = Some(path.clone());
+                        c.log(format!("Connecting failed {CONNECT_TRIES} times: not trying again until the unit is reconnected"));
+                    }
                 }
-            })?;
-            // an earlier failure to connect (rights refused, say) is over now
-            c.with(|s| {
-                if s.alert.as_ref().is_some_and(|(_, t)| t.starts_with("USB error during connecting")) {
-                    s.alert = None;
-                }
-            });
-            let conn = Connection::start(&path, dev, &mut log)?;
-            let backup_dir = c.shared.lock().unwrap().backup_dir.clone();
-            let unit = Session::open(conn, backup_dir, &mut log, &mut |d, t| c.with(|s| s.pct = d as f32 / t as f32));
-            let unit = match unit {
-                Ok(u) => u,
-                Err(e) => {
-                    c.with(|s| {
-                        s.phase = Phase::Waiting;
-                        s.stage[0] = Stage::Idle;
-                    });
-                    return Err(e);
-                }
-            };
-            let view = device_view(&unit);
-            c.log(format!("{} · {} · bootloader {} · flash read and checked", view.model, view.firmware, view.bootloader));
-            c.log(format!("Loader: {}{}", unit.dev.loader(),
-                unit.unit_id.as_ref().map(|u| format!(" · unit ID {u}")).unwrap_or_default()));
-            let (n, last) = unit.dev.retries();
-            if n > 0 {
-                c.log(format!("{n} USB transfers had to be sent again (last: {last}): check the cable and port"));
             }
-            if !view.certain {
-                c.log("The model is not certain: check it under DEVICE INFO before writing".into());
-            }
-            let map = sector_map(&unit.flash, unit.dev.chip_key(), unit.board());
-            let suggest = unit.bootloader_suggestion().filter(|_| {
-                let id = unit.unit_id.clone().unwrap_or_else(|| path.clone());
-                let mut asked = c.suggested.lock().unwrap();
-                !asked.contains(&id) && { asked.push(id); true }
-            });
-            let mut unit = unit;
-            unit.show_on_unit();
-            *c.unit.lock().unwrap() = Some(unit);
-            c.with(|s| {
-                s.device = Some(view);
-                s.map = map;
-                s.phase = Phase::Ready;
-                s.stage[0] = Stage::Done;
-                s.pct = 0.0;
-                s.suggest_boot = suggest;
-            });
-            c.replan_now();
-            Ok(())
+            r
         });
+    }
+
+    fn connect_now(&self, path: &str) -> Result<(), Error> {
+        let c = self;
+        let path = path.to_string();
+        c.with(|s| {
+            s.phase = Phase::Connecting;
+            s.stage = [Stage::Active, Stage::Idle, Stage::Idle, Stage::Idle];
+            s.pct = 0.0;
+            s.marks.clear();
+        });
+        c.log(format!("Unit found in download mode: {path}"));
+        let mut log = |m: String| c.log(m);
+        let dev = Device::open(&path).inspect_err(|e| {
+            // Windows: any failure may have come after the system's dialog
+            // (the helper not starting), which every scan would show again
+            if cfg!(windows) || matches!(e, ScsiError::NeedsAdmin(_)) {
+                *c.declined.lock().unwrap() = Some(path.clone());
+            }
+        })?;
+        // an earlier failure to connect (rights refused, say) is over now
+        c.with(|s| {
+            if s.alert.as_ref().is_some_and(|(_, t)| t.starts_with("USB error during connecting")) {
+                s.alert = None;
+            }
+        });
+        let conn = Connection::start(&path, dev, &mut log)?;
+        let backup_dir = c.shared.lock().unwrap().backup_dir.clone();
+        let unit = Session::open(conn, backup_dir, &mut log, &mut |d, t| c.with(|s| s.pct = d as f32 / t as f32));
+        let unit = match unit {
+            Ok(u) => u,
+            Err(e) => {
+                c.with(|s| {
+                    s.phase = Phase::Waiting;
+                    s.stage[0] = Stage::Idle;
+                });
+                return Err(e);
+            }
+        };
+        let view = device_view(&unit);
+        c.log(format!("{} · {} · bootloader {} · flash read and checked", view.model, view.firmware, view.bootloader));
+        c.log(format!("Loader: {}{}", unit.dev.loader(),
+            unit.unit_id.as_ref().map(|u| format!(" · unit ID {u}")).unwrap_or_default()));
+        let (n, last) = unit.dev.retries();
+        if n > 0 {
+            c.log(format!("{n} USB transfers had to be sent again (last: {last}): check the cable and port"));
+        }
+        if !view.certain {
+            c.log("The model is not certain: check it under DEVICE INFO before writing".into());
+        }
+        let map = sector_map(&unit.flash, unit.dev.chip_key(), unit.board());
+        let suggest = unit.bootloader_suggestion().filter(|_| {
+            let id = unit.unit_id.clone().unwrap_or_else(|| path.clone());
+            let mut asked = c.suggested.lock().unwrap();
+            !asked.contains(&id) && { asked.push(id); true }
+        });
+        let mut unit = unit;
+        unit.show_on_unit();
+        *c.unit.lock().unwrap() = Some(unit);
+        c.with(|s| {
+            s.device = Some(view);
+            s.map = map;
+            s.phase = Phase::Ready;
+            s.stage[0] = Stage::Done;
+            s.pct = 0.0;
+            s.suggest_boot = suggest;
+        });
+        c.replan_now();
+        Ok(())
     }
 
     // ---- planning ----
@@ -435,6 +497,8 @@ impl Controller {
     fn replan_now(&self) {
         let (mode, files, wipe, with_boot, keep_boot, src) = {
             let s = self.shared.lock().unwrap();
+            // (choices change under this lock)
+            self.planned.store(self.choices.load(Ordering::SeqCst), Ordering::SeqCst);
             (s.mode, s.files.clone(), s.wipe, s.with_boot, s.keep_boot, s.boot_source)
         };
         let guard = self.unit.lock().unwrap();
@@ -467,7 +531,10 @@ impl Controller {
                 None => return need(self, "Choose a backup file"),
                 Some(d) => {
                     let id = files.get("restore").and_then(|p| crate::ops::backup_unit_id(p));
-                    d.and_then(|d| unit.plan_restore(&d, id.as_deref(), keep_boot))
+                    d.and_then(|d| {
+                        crate::ops::check_backup_file(&files["restore"], &d)?;
+                        unit.plan_restore(&d, id.as_deref(), keep_boot)
+                    })
                 }
             },
             Mode::Firmware => match read("firmware") {
@@ -535,7 +602,7 @@ impl Controller {
     // ---- the window's actions ----
 
     pub fn select_mode(&self, m: Mode) {
-        if !self.with(|s| { let ok = !s.busy; if ok { s.mode = m; } ok }) {
+        if !self.choose(|s| { let ok = !s.busy; if ok { s.mode = m; } ok }) {
             return;
         }
         self.replan();
@@ -545,7 +612,7 @@ impl Controller {
     /// it, to be reviewed as any write. Whether it was taken: a yes while the
     /// connection is still being planned leaves the question up, to be answered again.
     pub fn answer_boot_suggestion(&self, install: bool) -> bool {
-        let taken = self.with(|s| {
+        let taken = self.choose(|s| {
             if install && s.busy {
                 return false;
             }
@@ -563,22 +630,22 @@ impl Controller {
     }
 
     pub fn set_wipe(&self, v: bool) {
-        self.with(|s| s.wipe = v);
+        self.choose(|s| s.wipe = v);
         self.replan();
     }
 
     pub fn set_with_boot(&self, v: bool) {
-        self.with(|s| s.with_boot = v);
+        self.choose(|s| s.with_boot = v);
         self.replan();
     }
 
     pub fn set_keep_boot(&self, v: bool) {
-        self.with(|s| s.keep_boot = v);
+        self.choose(|s| s.keep_boot = v);
         self.replan();
     }
 
     pub fn set_boot_source(&self, v: BootSource) {
-        self.with(|s| s.boot_source = v);
+        self.choose(|s| s.boot_source = v);
         self.replan();
     }
 
@@ -589,7 +656,7 @@ impl Controller {
                 u.show_on_unit();
                 let view = device_view(u);
                 let map = sector_map(&u.flash, u.dev.chip_key(), u.board());
-                self.with(|s| {
+                self.choose(|s| {
                     s.device = Some(view);
                     s.map = map;
                 });
@@ -602,7 +669,11 @@ impl Controller {
     /// Opens a file dialog in a thread; the choice is planned when it returns.
     pub fn choose_file(&self, kind: FileKind) {
         let c = self.clone();
-        let dir = self.shared.lock().unwrap().backup_dir.clone();
+        // counted with the lock a write is admitted under, until the choice is in
+        let dir = self.with(|s| {
+            self.picking.fetch_add(1, Ordering::SeqCst);
+            s.backup_dir.clone()
+        });
         std::thread::spawn(move || {
             let d = rfd::FileDialog::new();
             let d = match kind {
@@ -611,16 +682,26 @@ impl Controller {
                 FileKind::Stock => d.set_title("Choose an official package (its stock bootloader is used)").add_filter("Firmware packages", &["fwsc"]),
                 FileKind::BootFile => d.set_title("Choose a bootloader file").add_filter("Bootloaders", &["boot"]),
             };
-            if let Some(p) = d.add_filter("All files", &["*"]).pick_file() {
+            let picked = d.add_filter("All files", &["*"]).pick_file();
+            if let Some(p) = &picked {
                 c.log(format!("{} chosen", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
-                c.with(|s| { s.files.insert(file_key(kind), p); });
+            }
+            let chosen = picked.is_some();
+            c.with(|s| {
+                if let Some(p) = picked {
+                    c.choices.fetch_add(1, Ordering::SeqCst);
+                    s.files.insert(file_key(kind), p);
+                }
+                c.picking.fetch_sub(1, Ordering::SeqCst);
+            });
+            if chosen {
                 c.replan();
             }
         });
     }
 
     pub fn pick_backup(&self, path: PathBuf) {
-        self.with(|s| {
+        self.choose(|s| {
             s.files.insert("restore", path);
             s.mode = Mode::Restore;
         });
@@ -652,11 +733,19 @@ impl Controller {
 
     /// Write the reviewed plan.
     pub fn confirm(&self) {
-        let Some(plan) = self.plan.lock().unwrap().clone() else { return };
-        if plan.sectors.is_empty() {
-            return;
-        }
-        self.work("writing", move |c| {
+        // not a plan made before the latest choice: that one is planned first,
+        // for the user to review
+        // (Checked as the write is admitted: choices change with the same lock
+        // held, so none slips in between, and once it runs nothing is planned.)
+        let (mut stale, mut picking) = (false, false);
+        let fresh = |_: &Shared| {
+            // a file dialog still open may change the choice: it is closed first
+            picking = self.picking.load(Ordering::SeqCst) != 0;
+            stale = self.choices.load(Ordering::SeqCst) != self.planned.load(Ordering::SeqCst);
+            !picking && !stale
+        };
+        self.work_if("writing", fresh, move |c| {
+            let Some(plan) = c.plan.lock().unwrap().clone().filter(|p| !p.sectors.is_empty()) else { return Ok(()) };
             let total = plan.sectors.len();
             c.with(|s| {
                 s.phase = Phase::Working;
@@ -706,10 +795,12 @@ impl Controller {
                 });
             };
             let mut log_lines = vec![];
+            let have_backup;
             let result = {
                 let mut g = c.unit.lock().unwrap();
                 let u = g.as_mut().ok_or_else(|| Error::Refused("no unit connected".into()))?;
                 let r = u.apply(&plan, &mut event, &mut |m| log_lines.push(m));
+                have_backup = u.backup_path.is_some();
                 let saved = u.backup_path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
                 let view = device_view(u);
                 let map = sector_map(&u.flash, u.dev.chip_key(), u.board());
@@ -724,7 +815,9 @@ impl Controller {
                 c.log(m);
             }
             c.log_retries();
-            if result.is_err() {
+            if result.is_err() && !have_backup {
+                c.log("Nothing was written: the backup that comes first could not be saved.".into());
+            } else if result.is_err() {
                 c.log("Nothing is lost: the backup is saved. Choose the same operation again to finish it; only what is \
                        still missing is written.".into());
             }
@@ -745,6 +838,12 @@ impl Controller {
             *c.plan.lock().unwrap() = None;
             Ok(())
         });
+        if picking {
+            self.log("A file is still being chosen: close its window first, nothing written".into());
+        } else if stale {
+            self.log("The choices changed after this plan was made: planning again, nothing written".into());
+            self.replan();
+        }
     }
 
     /// Log how many USB transfers were sent again (they hint at a poor cable or port).

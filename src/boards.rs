@@ -204,7 +204,7 @@ impl Analysis {
         // Baud Girl keeps its settings at 0xD9000 on both models; its FM-1 build
         // calls itself FM-1_101, like a stock version
         let baud_girl = table.iter().any(|e| e.name == "VM" && e.addr == 0xD9000);
-        if BOOT_AREA + (app.addr + app.len) as usize > flash.len() {
+        if BOOT_AREA + app.addr as usize + app.len as usize > flash.len() {
             return;
         }
         let text = app_read(flash, BOOT_AREA, app.addr as usize, app.len as usize, key);

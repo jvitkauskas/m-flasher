@@ -59,6 +59,20 @@ impl Helper {
         let arg = CString::new(USB_HELPER).unwrap();
         let argv = [arg.as_ptr(), std::ptr::null()];
         let prompt = c"M-Flasher needs administrator rights to reach the unit's USB download mode.";
+        // Looked up when needed, not linked: the call is long deprecated, and
+        // were macOS to drop it, a linked M-Flasher would not start at all,
+        // not even for the command line under sudo, which doesn't use it.
+        type Execute = unsafe extern "C" fn(*mut c_void, *const c_char, u32, *const *const c_char, *mut *mut libc::FILE) -> i32;
+        // SAFETY: dlsym with a valid C string; a null pointer is None, and
+        // anything else is the Security framework's function of this type.
+        let execute: Option<Execute> = unsafe {
+            std::mem::transmute(libc::dlsym(libc::RTLD_DEFAULT, c"AuthorizationExecuteWithPrivileges".as_ptr()))
+        };
+        let Some(execute) = execute else {
+            return Err(ScsiError::NeedsAdmin(
+                "this macOS no longer lets an app ask for administrator rights this way: run M-Flasher from Terminal \
+                 with sudo".into()));
+        };
         // SAFETY: Security framework calls with initialised items; every
         // pointer outlives the call it is passed to.
         unsafe {
@@ -83,15 +97,20 @@ impl Helper {
             // interaction allowed, extend rights, preauthorize
             let mut pipe: *mut libc::FILE = std::ptr::null_mut();
             let ok = AuthorizationCopyRights(auth, &rights, &environment, 1 | 2 | 16, std::ptr::null_mut()) == 0
-                && AuthorizationExecuteWithPrivileges(auth, path.as_ptr(), 0, argv.as_ptr(), &mut pipe) == 0
+                && execute(auth, path.as_ptr(), 0, argv.as_ptr(), &mut pipe) == 0
                 && !pipe.is_null();
             AuthorizationFree(auth, 0);
             if !ok {
                 return Err(refused());
             }
             // the helper's standard input and output, both ways
-            let fd = libc::dup(libc::fileno(pipe));
+            // (a copy that the programs the app starts do not inherit)
+            let fd = libc::fcntl(libc::fileno(pipe), libc::F_DUPFD_CLOEXEC, 0);
+            let error = std::io::Error::last_os_error();
             libc::fclose(pipe);
+            if fd < 0 {
+                return Err(ScsiError::Failed(format!("cannot talk to the USB helper: {error}")));
+            }
             Ok(Helper { pipe: File::from_raw_fd(fd) })
         }
     }
@@ -358,7 +377,5 @@ unsafe extern "C" {
     fn AuthorizationCopyRights(authorization: *mut c_void, rights: *const AuthorizationItemSet,
                                environment: *const AuthorizationItemSet, flags: u32,
                                authorized: *mut *mut AuthorizationItemSet) -> i32;
-    fn AuthorizationExecuteWithPrivileges(authorization: *mut c_void, path: *const c_char, options: u32,
-                                          arguments: *const *const c_char, pipe: *mut *mut libc::FILE) -> i32;
     fn AuthorizationFree(authorization: *mut c_void, flags: u32) -> i32;
 }

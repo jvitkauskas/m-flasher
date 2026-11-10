@@ -249,12 +249,19 @@ impl<F: Flash> Session<F> {
         create_dirs(&dir).map_err(|e| Error::Io(format!("cannot create {}: {e}", dir.display())))?;
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         let model = self.board().map(|b| b.key).unwrap_or("unknown");
-        // two backups in the same second: the second gets -2 (and so on)
-        let path = (1..)
+        // two backups in the same second: the second gets -2 (and so on). The
+        // name is taken by creating the file, so that another M-Flasher saving
+        // at the same moment gets the next one, and neither writes over the other's.
+        let (path, file) = (1..)
             .map(|i| dir.join(if i == 1 { format!("{model}-{stamp}.bin") } else { format!("{model}-{stamp}-{i}.bin") }))
-            .find(|p| !p.exists() && !p.with_extension("json").exists())
-            .unwrap();
-        std::fs::write(&path, &self.flash).map_err(|e| Error::Io(format!("cannot write {}: {e}", path.display())))?;
+            .filter(|p| !p.with_extension("json").exists())
+            .find_map(|p| match create_new(&p) {
+                Ok(f) => Some(Ok((p, f))),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(e) => Some(Err(Error::Io(format!("cannot write {}: {e}", p.display())))),
+            })
+            .unwrap()?;
+        write_synced(&path, file, &self.flash)?;
         let mut json = String::from("{\n");
         for (k, v) in self.info() {
             json += &format!("  \"{k}\": \"{}\",\n", v.replace('\\', "\\\\").replace('"', "\\\""));
@@ -262,7 +269,11 @@ impl<F: Flash> Session<F> {
         let sha: String = Sha256::digest(&self.flash).iter().map(|b| format!("{b:02x}")).collect();
         json += &format!("  \"sha256\": \"{sha}\",\n");
         json += &format!("  \"saved\": \"{stamp}\",\n  \"tool\": \"m-flasher {}\"\n}}\n", env!("CARGO_PKG_VERSION"));
-        std::fs::write(path.with_extension("json"), json).map_err(|e| Error::Io(e.to_string()))?;
+        let json_path = path.with_extension("json");
+        let file = create_new(&json_path).map_err(|e| Error::Io(format!("cannot write {}: {e}", json_path.display())))?;
+        write_synced(&json_path, file, json.as_bytes())?;
+        // the two names are on the disk too, not only what the files hold
+        sync_dir(&dir).map_err(|e| Error::Io(format!("cannot save the backup in {}: {e}", dir.display())))?;
         give_to_sudo_user(&path);
         give_to_sudo_user(&path.with_extension("json"));
         self.backup_path = Some(path.clone());
@@ -384,12 +395,26 @@ impl<F: Flash> Session<F> {
             notes.push("Also puts back the package's (stock) bootloader.".into());
         }
         if wipe_settings {
-            for e in app_table(&padded, key) {
+            // what the package itself installs: the boot area, the app's file
+            // table, its files and the code area it protects (PRCT, from 0: as
+            // the flash map draws the firmware). A package can declare its
+            // settings anywhere, and erasing them must never erase those.
+            let table = app_table(&padded, key);
+            let installed = table.iter().filter_map(|e| match e.attr {
+                0x82 => Some(BOOT_AREA + e.addr as usize + e.len as usize),
+                _ if e.name == "PRCT" && e.addr == 0 && e.len as usize <= FLASH_SIZE => Some(e.len as usize),
+                _ => None,
+            }).fold(BOOT_AREA + 32 * table.len(), usize::max);
+            for e in &table {
                 let (a, n) = (e.addr as usize, e.len as usize);
                 if (e.name == "VM" || e.name == "BTIF") && (e.attr == 0x12 || e.attr == 0x92) && n > 0
                     && a % SECTOR == 0 && a + n <= FLASH_SIZE {
                     if board.factory.iter().any(|&(fa, fb)| fa < a + n && a < fb) {
                         return refuse(format!("the package declares {} over factory data", e.name));
+                    }
+                    if a < installed {
+                        return refuse(format!("the package declares {} (0x{a:05X}) over the bootloader or its own firmware \
+                                               (up to 0x{:05X}): erasing it would erase those", e.name, installed - 1));
                     }
                     target[a..a + n].fill(0xFF);
                     allowed.push((a, a + n));
@@ -550,10 +575,77 @@ impl<F: Flash> Session<F> {
     }
 }
 
+/// A new file: never one that exists.
+fn create_new(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+/// Writes a file and has the system put it on the disk before returning: a
+/// backup must survive the computer losing power during the write it precedes.
+fn write_synced(path: &Path, mut f: std::fs::File, data: &[u8]) -> Result<(), Error> {
+    use std::io::Write;
+    let io = |e: std::io::Error| Error::Io(format!("cannot write {}: {e}", path.display()));
+    f.write_all(data).map_err(io)?;
+    f.sync_all().map_err(io)
+}
+
+/// Has the system put a folder's list of names on the disk: a synced file
+/// whose name is not there yet is lost with the power all the same. (Windows
+/// keeps names with the files, and does not let a folder be opened for this.)
+/// A file system that has no such thing (some network and FUSE ones say so)
+/// is not an error: there the file's own sync is all there is. Any other
+/// failure is, before anything is erased.
+fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Err(e) = std::fs::File::open(_dir).and_then(|d| d.sync_all()) {
+        use std::io::ErrorKind::{InvalidInput, Unsupported};
+        if !matches!(e.kind(), InvalidInput | Unsupported) {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+/// The text of `key` in a backup's .json, however the file is spaced.
+fn json_text<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let quoted = format!("\"{key}\"");
+    let rest = json[json.find(&quoted)? + quoted.len()..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    rest.split('"').next()
+}
+
+/// Checks a backup file against the SHA-256 saved with it in its .json. No
+/// .json, or one without a checksum (a backup from elsewhere): nothing to
+/// check. One that can't be read, or whose checksum isn't one, is refused:
+/// the check must not quietly not happen.
+pub fn check_backup_file(backup: &Path, data: &[u8]) -> Result<(), Error> {
+    let json_path = backup.with_extension("json");
+    let json = match std::fs::read_to_string(&json_path) {
+        Ok(j) => j,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return refuse(format!("cannot read {} to check the backup against it: {e}", json_path.display())),
+    };
+    if !json.contains("\"sha256\"") {
+        return Ok(());
+    }
+    let saved = json_text(&json, "sha256").filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()));
+    let Some(saved) = saved else {
+        return refuse(format!("the SHA-256 in {} is not readable, so the backup can't be checked against it. If you \
+                               trust the backup, remove that .json file.", json_path.display()));
+    };
+    let sha: String = Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect();
+    if !sha.eq_ignore_ascii_case(saved) {
+        return refuse(format!(
+            "{} is not the file that was saved: its SHA-256 differs from the one in {}. The backup is damaged or was \
+             changed. Use another backup; if you changed it on purpose, remove that .json file.",
+            backup.display(), json_path.display()));
+    }
+    Ok(())
+}
+
 /// The unit ID saved in a backup's .json, if any.
 pub fn backup_unit_id(backup: &Path) -> Option<String> {
     let json = std::fs::read_to_string(backup.with_extension("json")).ok()?;
-    let id = json.split("\"unit id\": \"").nth(1)?.split('"').next()?;
+    let id = json_text(&json, "unit id")?;
     (id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit())).then(|| id.to_string())
 }
 
@@ -563,6 +655,10 @@ pub fn create_dirs(dir: &Path) -> std::io::Result<()> {
         .map(Path::to_path_buf).collect();
     std::fs::create_dir_all(dir)?;
     new.iter().for_each(|d| give_to_sudo_user(d));
+    // the new folders' names, in the folders they were made in
+    for d in new.iter().filter_map(|d| d.parent()).filter(|p| !p.as_os_str().is_empty()) {
+        sync_dir(d)?;
+    }
     Ok(())
 }
 

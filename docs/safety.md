@@ -18,7 +18,14 @@ backup can repair.
   warning.
 - Installing m-bootloader is refused if the unit's chip key is damaged: it is
   the one part of the boot configuration kept, and firmware installers need it.
-- A full backup is saved before the first write of a session.
+- A full backup is saved before the first write of a session, and the system
+  is made to put it on the disk before anything is erased.
+- A backup to restore is checked against the SHA-256 saved with it (in its
+  `.json`); one that no longer matches is refused.
+- Erasing settings with a firmware package is refused where the package
+  declares them over the bootloader, its own firmware or the factory data.
+- A choice changed after the plan was made is planned again before anything
+  is written.
 
 **While writing**
 

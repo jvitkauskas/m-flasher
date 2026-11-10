@@ -376,12 +376,24 @@ mod sys {
     #[cfg(windows)]
     fn refresh() {}
 
+    thread_local! {
+        /// The client that lists the ports, kept by the thread that scans:
+        /// a new one every scan is a new client registered with the system's
+        /// MIDI service every second and a half.
+        static LISTER: std::cell::RefCell<Option<MidiOutput>> = const { std::cell::RefCell::new(None) };
+    }
+
     pub fn units() -> Vec<(String, Port)> {
-        let Ok(out) = MidiOutput::new("M-Flasher") else { return vec![] };
-        refresh();
-        let ports = out.ports();
-        let names: Vec<String> = ports.iter().map(|p| out.port_name(p).unwrap_or_default()).collect();
-        super::first_ports(&names).into_iter().map(|i| (names[i].clone(), Port(ports[i].clone()))).collect()
+        LISTER.with_borrow_mut(|lister| {
+            if lister.is_none() {
+                *lister = MidiOutput::new("M-Flasher").ok();
+            }
+            let Some(out) = lister.as_ref() else { return vec![] };
+            refresh();
+            let ports = out.ports();
+            let names: Vec<String> = ports.iter().map(|p| out.port_name(p).unwrap_or_default()).collect();
+            super::first_ports(&names).into_iter().map(|i| (names[i].clone(), Port(ports[i].clone()))).collect()
+        })
     }
 
     pub fn send(p: &Port, msg: &[u8]) -> Result<(), String> {

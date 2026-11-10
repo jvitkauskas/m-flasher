@@ -53,7 +53,12 @@ pub trait Scsi: Send {
 
     fn inquiry(&mut self) -> Result<(String, String), ScsiError> {
         let mut buf = [0u8; 36];
-        self.execute(&[0x12, 0, 0, 0, 36, 0], Data::In(&mut buf))?;
+        let got = self.execute(&[0x12, 0, 0, 0, 36, 0], Data::In(&mut buf))?;
+        // the names end at byte 32: with fewer the answer is not the unit's
+        // (a transport out of step), and asking again may get it
+        if got < 32 {
+            return Err(ScsiError::Failed(format!("command 0x1200: {got} of 36 bytes received")));
+        }
         let s = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
         Ok((s(&buf[8..16]), s(&buf[16..32])))
     }
