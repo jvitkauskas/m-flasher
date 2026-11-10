@@ -891,6 +891,10 @@ pub struct MockRom {
     pub fail_uploads: usize,
     /// This many FC40 commands fail (a transfer error).
     pub fail_identify: usize,
+    /// This many FC0A commands fail (a transfer error).
+    pub fail_online: usize,
+    /// Commands the ROM doesn't know are answered without an echo, not refused.
+    pub no_echo: bool,
 }
 
 /// The version in the bundled loader.
@@ -942,8 +946,15 @@ impl Scsi for MockRom {
                     self.fail_identify -= 1;
                     return Err(ScsiError::Failed("transfer failed".into()));
                 }
+                if op == 0xFC0A && self.fail_online > 0 {
+                    self.fail_online -= 1;
+                    return Err(ScsiError::Failed("transfer failed".into()));
+                }
                 if self.real_loader {
                     if self.loader.is_none() && op != 0xFB08 {
+                        if self.no_echo {
+                            return Ok(b.len());
+                        }
                         // the ROM does not know the command, and says so
                         return Err(ScsiError::Refused(format!("command 0x{op:04x} failed (status 1)")));
                     }
@@ -1314,4 +1325,10 @@ fn a_unit_without_a_loader_is_not_asked_again() {
     let (n, last) = c.unwrap().retries();
     assert_eq!(n, 1);
     assert!(last.starts_with("command 0xfc40: transfer failed"), "{last}");
+    // a ROM that answers what it doesn't know without an echo: no loader either
+    let (_, c) = start(MockRom { no_echo: true, ..Default::default() });
+    assert_eq!(c.unwrap().retries().0, 0);
+    // asking for another tool's loader fails every time: not taken for "none"
+    let (_, c) = start(MockRom { fail_online: 4, ..Default::default() });
+    assert!(matches!(c, Err(ScsiError::Failed(e)) if e.contains("0xfc0a")));
 }

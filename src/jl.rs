@@ -184,7 +184,13 @@ impl<S: Scsi> Connection<S> {
         // What is running already? A loader stays registered until the unit is
         // switched off. (Commands the ROM alone does not know just fail.)
         let ours_running = c.identify();
-        if ours_running.is_none() && c.probe(ONLINE_DEVICE).is_ok() {
+        // only a refusal says no other loader runs: a transfer that keeps failing says nothing
+        let other_loader = ours_running.is_none() && match c.probe(ONLINE_DEVICE) {
+            Ok(_) => true,
+            Err(ScsiError::Refused(_)) => false,
+            Err(e) => return Err(e),
+        };
+        if other_loader {
             // another tool's loader (JieLi's): jumping through it is not safe
             return Err(ScsiError::Failed(
                 "another flash loader is running on the unit: switch it off and on in download mode, then connect again".into()));
@@ -355,7 +361,9 @@ impl<S: Scsi> Connection<S> {
         };
         self.attempts(&what, probe, |d| d.execute(&c, Data::In(&mut resp)).map(|_| ()))?;
         if u16::from_be_bytes([resp[0], resp[1]]) != cmd {
-            return Err(ScsiError::Failed(format!("unexpected answer to command 0x{cmd:04x}")));
+            let text = format!("unexpected answer to command 0x{cmd:04x}");
+            // no echo: a command the unit does not know, for a probe
+            return Err(if probe { ScsiError::Refused(text) } else { ScsiError::Failed(text) });
         }
         Ok(resp)
     }
