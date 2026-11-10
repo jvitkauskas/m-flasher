@@ -273,8 +273,7 @@ impl<F: Flash> Session<F> {
         let file = create_new(&json_path).map_err(|e| Error::Io(format!("cannot write {}: {e}", json_path.display())))?;
         write_synced(&json_path, file, json.as_bytes())?;
         // the two names are on the disk too, not only what the files hold
-        // (as far as the file system does that: some network and FUSE ones refuse)
-        let _ = sync_dir(&dir);
+        sync_dir(&dir).map_err(|e| Error::Io(format!("cannot save the backup in {}: {e}", dir.display())))?;
         give_to_sudo_user(&path);
         give_to_sudo_user(&path.with_extension("json"));
         self.backup_path = Some(path.clone());
@@ -593,9 +592,17 @@ fn write_synced(path: &Path, mut f: std::fs::File, data: &[u8]) -> Result<(), Er
 /// Has the system put a folder's list of names on the disk: a synced file
 /// whose name is not there yet is lost with the power all the same. (Windows
 /// keeps names with the files, and does not let a folder be opened for this.)
+/// A file system that has no such thing (some network and FUSE ones say so)
+/// is not an error: there the file's own sync is all there is. Any other
+/// failure is, before anything is erased.
 fn sync_dir(_dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
-    std::fs::File::open(_dir)?.sync_all()?;
+    if let Err(e) = std::fs::File::open(_dir).and_then(|d| d.sync_all()) {
+        use std::io::ErrorKind::{InvalidInput, Unsupported};
+        if !matches!(e.kind(), InvalidInput | Unsupported) {
+            return Err(e);
+        }
+    }
     Ok(())
 }
 
@@ -650,7 +657,7 @@ pub fn create_dirs(dir: &Path) -> std::io::Result<()> {
     new.iter().for_each(|d| give_to_sudo_user(d));
     // the new folders' names, in the folders they were made in
     for d in new.iter().filter_map(|d| d.parent()).filter(|p| !p.as_os_str().is_empty()) {
-        let _ = sync_dir(d);
+        sync_dir(d)?;
     }
     Ok(())
 }

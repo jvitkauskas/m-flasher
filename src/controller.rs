@@ -266,7 +266,15 @@ impl Controller {
 
     /// Run f in a thread unless something is running; errors become alerts.
     fn work(&self, name: &'static str, f: impl FnOnce(&Controller) -> Result<(), Error> + Send + 'static) {
-        if !self.with(|s| !std::mem::replace(&mut s.busy, true)) {
+        self.work_if(name, |_| true, f);
+    }
+
+    /// As `work`, but only if `admit` agrees. It is asked with what the
+    /// window shows locked, in the same step that marks the work as running:
+    /// no choice can change between its answer and the start.
+    fn work_if(&self, name: &'static str, admit: impl FnOnce(&Shared) -> bool,
+               f: impl FnOnce(&Controller) -> Result<(), Error> + Send + 'static) {
+        if !self.with(|s| !s.busy && admit(s) && { s.busy = true; true }) {
             return;
         }
         let c = self.clone();
@@ -642,11 +650,10 @@ impl Controller {
         if let Some(b) = BOARDS.iter().copied().find(|b| b.key == key) {
             if let Some(u) = self.unit.lock().unwrap().as_mut() {
                 u.board_override = Some(b);
-                self.choices.fetch_add(1, Ordering::SeqCst);
                 u.show_on_unit();
                 let view = device_view(u);
                 let map = sector_map(&u.flash, u.dev.chip_key(), u.board());
-                self.with(|s| {
+                self.choose(|s| {
                     s.device = Some(view);
                     s.map = map;
                 });
@@ -711,16 +718,15 @@ impl Controller {
     pub fn confirm(&self) {
         // not a plan made before the latest choice: that one is planned first,
         // for the user to review
-        if self.choices.load(Ordering::SeqCst) != self.planned.load(Ordering::SeqCst) {
-            self.log("The choices changed after this plan was made: planning again, nothing written".into());
-            self.replan();
-            return;
-        }
-        let Some(plan) = self.plan.lock().unwrap().clone() else { return };
-        if plan.sectors.is_empty() {
-            return;
-        }
-        self.work("writing", move |c| {
+        // (Checked as the write is admitted: choices change with the same lock
+        // held, so none slips in between, and once it runs nothing is planned.)
+        let mut stale = false;
+        let fresh = |_: &Shared| {
+            stale = self.choices.load(Ordering::SeqCst) != self.planned.load(Ordering::SeqCst);
+            !stale
+        };
+        self.work_if("writing", fresh, move |c| {
+            let Some(plan) = c.plan.lock().unwrap().clone().filter(|p| !p.sectors.is_empty()) else { return Ok(()) };
             let total = plan.sectors.len();
             c.with(|s| {
                 s.phase = Phase::Working;
@@ -813,6 +819,10 @@ impl Controller {
             *c.plan.lock().unwrap() = None;
             Ok(())
         });
+        if stale {
+            self.log("The choices changed after this plan was made: planning again, nothing written".into());
+            self.replan();
+        }
     }
 
     /// Log how many USB transfers were sent again (they hint at a poor cable or port).
