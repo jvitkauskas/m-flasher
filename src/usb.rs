@@ -20,6 +20,8 @@ pub struct Device {
     iface: u8,
     ep_in: u8,
     ep_out: u8,
+    /// Bytes per packet of the data-in endpoint.
+    in_packet: usize,
     tag: u32,
     /// Linux: the disk driver was detached from the interface.
     detached: bool,
@@ -45,24 +47,34 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
+fn is_unit(d: &rusb::Device<GlobalContext>) -> bool {
+    d.device_descriptor().is_ok_and(|dd| dd.vendor_id() == VID && dd.product_id() == PID)
+}
+
 /// The USB device of the unit at path, and its mass-storage interface with
-/// its two bulk endpoints.
-fn find(path: &str) -> Result<(rusb::Device<GlobalContext>, u8, u8, u8), ScsiError> {
+/// its two bulk endpoints (and the data-in endpoint's packet size). Only a
+/// device with the unit's USB IDs: taking any other disk from the system's
+/// driver, a mounted one too, is never right (and on macOS not undone until
+/// it is unplugged).
+fn find(path: &str) -> Result<(rusb::Device<GlobalContext>, u8, u8, u8, usize), ScsiError> {
     let devices = rusb::devices().map_err(|e| failed("cannot list the USB devices", e))?;
     let dev = devices
         .iter()
         .find(|d| path_of(d) == path)
         .ok_or_else(|| ScsiError::Failed(format!("{path}: the unit is no longer connected")))?;
+    if !is_unit(&dev) {
+        return Err(ScsiError::Failed(format!("{path} is not a unit in download mode (USB {VID:04X}:{PID:04X})")));
+    }
     let config = dev.active_config_descriptor().map_err(|e| failed("cannot read the USB configuration", e))?;
     for iface in config.interfaces() {
         for alt in iface.descriptors().filter(|a| a.class_code() == 8) {
             let bulk = |dir| {
                 alt.endpoint_descriptors()
                     .find(|e| e.transfer_type() == TransferType::Bulk && e.direction() == dir)
-                    .map(|e| e.address())
+                    .map(|e| (e.address(), e.max_packet_size() as usize))
             };
-            if let (Some(i), Some(o)) = (bulk(Direction::In), bulk(Direction::Out)) {
-                return Ok((dev, alt.interface_number(), i, o));
+            if let (Some((i, packet)), Some((o, _))) = (bulk(Direction::In), bulk(Direction::Out)) {
+                return Ok((dev, alt.interface_number(), i, o, packet));
             }
         }
     }
@@ -71,7 +83,7 @@ fn find(path: &str) -> Result<(rusb::Device<GlobalContext>, u8, u8, u8), ScsiErr
 
 impl Device {
     pub fn open(path: &str) -> Result<Device, ScsiError> {
-        let (dev, iface, ep_in, ep_out) = find(path)?;
+        let (dev, iface, ep_in, ep_out, in_packet) = find(path)?;
         let handle = dev.open().map_err(|e| match e {
             rusb::Error::Access => needs_root(e),
             e => failed("cannot open the unit", e),
@@ -94,7 +106,8 @@ impl Device {
             }
             handle.detach_kernel_driver(iface).map_err(|e| failed("cannot take the unit from macOS's disk driver", e))?;
             // after a capture macOS takes a moment to offer the interface again
-            for _ in 0..10 {
+            // (up to 3 s: a busy or slow Mac takes longer than the usual few tenths)
+            for _ in 0..30 {
                 std::thread::sleep(Duration::from_millis(100));
                 claimed = handle.claim_interface(iface);
                 if claimed.is_ok() {
@@ -111,7 +124,32 @@ impl Device {
             )),
             e => failed("cannot take the unit's USB interface", e),
         })?;
-        Ok(Device { handle, iface, ep_in, ep_out, tag: 0, detached })
+        // Tags start somewhere random: the system's disk driver numbers its
+        // commands too, and a status block it left behind must never pass for
+        // the answer to one of ours (starting at 1 each time, it could).
+        let tag = {
+            use std::hash::{BuildHasher, Hasher};
+            std::collections::hash_map::RandomState::new().build_hasher().finish() as u32
+        };
+        Ok(Device { handle, iface, ep_in, ep_out, in_packet, tag, detached })
+    }
+
+    /// One read of the data phase into `buf`. Read whole packets: asking
+    /// libusb for less than the device then sends is an overflow, in which
+    /// data is lost and the transport left out of step.
+    fn read_data(&self, buf: &mut [u8]) -> Result<usize, rusb::Error> {
+        let packet = self.in_packet.max(1);
+        if buf.len() % packet == 0 {
+            return self.handle.read_bulk(self.ep_in, buf, TIMEOUT);
+        }
+        let mut whole = vec![0u8; buf.len().next_multiple_of(packet)];
+        let n = self.handle.read_bulk(self.ep_in, &mut whole, TIMEOUT)?;
+        if n > buf.len() {
+            // more than asked for: not this command's data
+            return Err(rusb::Error::Overflow);
+        }
+        buf[..n].copy_from_slice(&whole[..n]);
+        Ok(n)
     }
 
     /// Bulk-Only Mass Storage Reset, then clear both endpoints' halts.
@@ -142,6 +180,9 @@ impl Device {
     }
 
     fn transfer(&mut self, cdb: &[u8], data: Data) -> Result<usize, ScsiError> {
+        if cdb.is_empty() || cdb.len() > 16 {
+            return Err(ScsiError::Refused(format!("a command of {} bytes: 1 to 16 fit", cdb.len())));
+        }
         self.tag = self.tag.wrapping_add(1);
         let (len, flags) = match &data {
             Data::None => (0, 0),
@@ -171,7 +212,7 @@ impl Device {
                 let status = |b: &[u8]| if b.len() > 13 { csw_tag(b) } else { None };
                 let mut skipped = 0;
                 loop {
-                    match self.handle.read_bulk(self.ep_in, buf, TIMEOUT) {
+                    match self.read_data(buf) {
                         // this command's status: the device sent no data
                         Ok(13) if status(buf) == Some(self.tag) => {
                             early = Some(buf[..13].try_into().unwrap());
@@ -248,7 +289,7 @@ pub fn find_devices() -> Vec<(String, String)> {
     let Ok(devices) = rusb::devices() else { return vec![] };
     devices
         .iter()
-        .filter(|d| d.device_descriptor().is_ok_and(|dd| dd.vendor_id() == VID && dd.product_id() == PID))
+        .filter(is_unit)
         .map(|d| {
             let p = path_of(&d);
             let desc = format!("WL82 UBOOT1.00 (USB bus {}, device {})", d.bus_number(), d.address());
