@@ -108,13 +108,63 @@ jobs:
       - uses: actions/checkout@v7
       - run: cargo test --release
       - run: cargo build --release
-      - name: Package
-        # a zip: browsers warn about downloading a bare unsigned .exe
+      - name: Stage
         shell: pwsh
         run: |
           New-Item -ItemType Directory pkg | Out-Null
           Copy-Item target/release/m-flasher.exe pkg/M-Flasher.exe
           Copy-Item windows/README.txt, LICENSE pkg/
+      - name: Which signature
+        # SignPath signs the program: with the test certificate on branches, with
+        # the release one on tags once SIGNPATH_RELEASE_SIGNING is 'true'. Not on
+        # pull requests (no secret in a fork's) nor where SignPath isn't set up.
+        id: signing
+        shell: bash
+        env:
+          ORGANIZATION: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          RELEASE_SIGNING: ${{ vars.SIGNPATH_RELEASE_SIGNING }}
+        run: |
+          policy=
+          if [ -n "$ORGANIZATION" ] && [ "$GITHUB_EVENT_NAME" = push ]; then
+            case "$GITHUB_REF" in
+              refs/tags/*) [ "$RELEASE_SIGNING" = true ] && policy=release-signing ;;
+              *) policy=test-signing ;;
+            esac
+          fi
+          echo "policy=$policy" >> "$GITHUB_OUTPUT"
+          echo "signing policy: ${policy:-none, the program stays unsigned}"
+      - name: The unsigned program, for SignPath to fetch
+        if: steps.signing.outputs.policy != ''
+        id: unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: M-Flasher-windows-unsigned
+          path: pkg/M-Flasher.exe
+      - name: Sign
+        if: steps.signing.outputs.policy != ''
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: m-flasher
+          signing-policy-slug: ${{ steps.signing.outputs.policy }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          # a release waits for its signing request to be approved by hand
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed
+      - name: The signed program into the package
+        if: steps.signing.outputs.policy != ''
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature signed/M-Flasher.exe
+          $signature | Format-List Status, StatusMessage, SignerCertificate
+          if (-not $signature.SignerCertificate) { throw 'SignPath returned a program without a signature' }
+          Copy-Item signed/M-Flasher.exe pkg/M-Flasher.exe -Force
+      - name: Package
+        # a zip: browsers warn about downloading a bare .exe
+        shell: pwsh
+        run: |
           Compress-Archive pkg/* M-Flasher-windows.zip
           Get-Item pkg/M-Flasher.exe, M-Flasher-windows.zip | Format-Table Name, Length
       - uses: actions/upload-artifact@v7

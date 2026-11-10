@@ -53,13 +53,29 @@ a recovery menu for when the firmware does not start.
 
 M-Flasher is free. Its apps aren't signed yet: that's why Windows and macOS
 ask for an extra confirmation the first time, and partly why Microsoft Defender
-sometimes takes a new release for a threat. Signing them costs money every
-year: $99 for Apple's developer program, for macOS, and a code signing
-certificate for Windows, around €100–300. Donations go to these first; what's
-left after a year's signing goes to the next.
+sometimes takes a new release for a threat. Signing for Windows is on its way,
+free of charge ([code signing policy](#code-signing-policy)). Signing for macOS
+needs Apple's developer program, $99 every year: donations go to that first,
+and what's left after a year's signing goes to the next.
 
 [Sponsor on GitHub](https://github.com/sponsors/jvitkauskas) ·
 [Donate on Ko-fi](https://ko-fi.com/jvitkauskas)
+
+## Code signing policy
+
+Free code signing for Windows provided by [SignPath.io](https://about.signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/).
+
+- The signed program is built from this repository by its
+  [GitHub Actions workflow](.github/workflows/build.yml), and nothing else is
+  signed.
+- Committers, reviewers and approvers:
+  [Julius Vitkauskas](https://github.com/jvitkauskas). Changes from anyone
+  else are reviewed before they are merged, and every release is approved for
+  signing by hand.
+- Privacy: this program will not transfer any information to other networked
+  systems unless specifically requested by the user or the person installing
+  or operating it. It has no network code: it talks to the unit over USB.
 
 ## Credits and license
 
