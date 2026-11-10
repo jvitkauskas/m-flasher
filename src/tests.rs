@@ -889,6 +889,8 @@ pub struct MockRom {
     pub lose_jump: bool,
     /// This many FB06 commands fail.
     pub fail_uploads: usize,
+    /// This many inquiries fail (out of step, as on macOS after its disk driver).
+    pub fail_inquiries: usize,
     /// This many FC40 commands fail (a transfer error).
     pub fail_identify: usize,
     /// This many FC0A commands fail (a transfer error).
@@ -907,6 +909,10 @@ fn bundled_version() -> &'static str {
 impl Scsi for MockRom {
     fn execute(&mut self, cdb: &[u8], data: Data) -> Result<usize, ScsiError> {
         if cdb[0] == 0x12 {
+            if self.fail_inquiries > 0 {
+                self.fail_inquiries -= 1;
+                return Err(ScsiError::Failed("command 0x1200: reading its status: Overflow".into()));
+            }
             if let Data::In(b) = data {
                 b[8..32].fill(b' ');
                 b[8..12].copy_from_slice(b"WL82");
@@ -1312,6 +1318,15 @@ fn asks_for_the_sg_driver_only_when_a_unit_needs_it() {
     std::fs::create_dir(&class).unwrap();
     assert!(!sg_missing_for_unit(&class, &usb), "driver loaded");
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn identifying_the_unit_is_tried_again() {
+    let c = Connection::open("/dev/fake", MockRom { fail_inquiries: 2, ..Default::default() }).unwrap();
+    let (n, last) = c.retries();
+    assert_eq!(n, 2);
+    assert!(last.starts_with("identifying the unit: command 0x1200"), "{last}");
+    assert!(Connection::open("/dev/fake", MockRom { fail_inquiries: 3, ..Default::default() }).is_err());
 }
 
 #[test]
