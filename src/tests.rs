@@ -336,6 +336,20 @@ fn a_backup_that_no_longer_matches_its_checksum_is_refused() {
         Err(Error::Refused(t)) => assert!(t.contains("SHA-256"), "{t}"),
         _ => panic!("a changed backup must be refused"),
     }
+    // the checksum is found however the .json is spaced
+    let json = std::fs::read_to_string(path.with_extension("json")).unwrap();
+    std::fs::write(path.with_extension("json"), json.replace("\": \"", "\":\"").replace('\n', "")).unwrap();
+    assert!(matches!(crate::ops::check_backup_file(&path, &data), Err(Error::Refused(_))));
+    assert_eq!(crate::ops::backup_unit_id(&path), crate::ops::backup_unit_id(&path).filter(|i| i.len() == 16));
+    data[0x1234] ^= 1;
+    crate::ops::check_backup_file(&path, &data).unwrap();
+    data[0x1234] ^= 1;
+    // one that is there but isn't a checksum: refused, not skipped
+    std::fs::write(path.with_extension("json"), "{\"sha256\": \"12345\"}").unwrap();
+    match crate::ops::check_backup_file(&path, &data) {
+        Err(Error::Refused(t)) => assert!(t.contains("not readable"), "{t}"),
+        _ => panic!("a checksum that isn't one must not pass"),
+    }
     // a backup without a .json (from elsewhere), or one without a checksum: nothing to check
     std::fs::write(path.with_extension("json"), "{\n  \"model\": \"FM-1\"\n}\n").unwrap();
     crate::ops::check_backup_file(&path, &data).unwrap();
@@ -894,6 +908,12 @@ fn backups_in_the_same_second_keep_both() {
     assert_eq!(std::fs::read(&a).unwrap()[0], 0xFF);
     assert_eq!(std::fs::read(&b).unwrap()[0], 0);
     assert!(a.with_extension("json").exists() && b.with_extension("json").exists());
+    // a name another M-Flasher took in the meantime is never written over
+    let taken = std::fs::read(&a).unwrap();
+    std::fs::remove_file(a.with_extension("json")).unwrap();
+    let c = s.save_backup(Some(&dir)).unwrap();
+    assert!(c != a && c != b);
+    assert_eq!(std::fs::read(&a).unwrap(), taken);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
