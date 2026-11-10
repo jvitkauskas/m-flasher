@@ -251,7 +251,7 @@ fn minifm_and_fm1_cross_flash_both_ways() {
     let mini_pkg = package("MiniFM_016", &mini[..0xA9000]);
 
     let mut s = fm1_session(mini.clone(), "minifm-to-fm1");
-    let p = s.plan_firmware(&fm1_pkg, false, false).unwrap();
+    let p = s.plan_firmware(&fm1_pkg, false).unwrap();
     assert!(p.warnings.iter().any(|w| w.contains("report itself")), "{:?}", p.warnings);
     assert_eq!(p.warnings.len(), 1, "the layouts are the same: {:?}", p.warnings);
     apply(&mut s, &p).unwrap();
@@ -259,15 +259,15 @@ fn minifm_and_fm1_cross_flash_both_ways() {
     assert_eq!(s.analysis.app_status, AppStatus::Ok);
     assert_eq!(std::fs::read(s.backup_path.as_ref().unwrap()).unwrap(), mini, "the MiniFM firmware can be restored");
 
-    let p = s.plan_firmware(&mini_pkg, false, false).unwrap();
+    let p = s.plan_firmware(&mini_pkg, false).unwrap();
     assert!(p.warnings.iter().any(|w| w.contains("report itself")), "{:?}", p.warnings);
     apply(&mut s, &p).unwrap();
     assert_eq!(s.analysis.firmware_text, "MiniFM 016 (stock)");
     assert_eq!(s.analysis.app_status, AppStatus::Ok);
 
     // the model's own package: nothing to warn about
-    assert!(s.plan_firmware(&mini_pkg, false, false).unwrap().warnings.is_empty());
-    assert!(fm1_session(fm1, "fm1-to-fm1").plan_firmware(&fm1_pkg, false, false).unwrap().warnings.is_empty());
+    assert!(s.plan_firmware(&mini_pkg, false).unwrap().warnings.is_empty());
+    assert!(fm1_session(fm1, "fm1-to-fm1").plan_firmware(&fm1_pkg, false).unwrap().warnings.is_empty());
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn minifm_package_is_refused_on_an_smk37() {
     let mut s = fm1_session(image_016(b"MiniFM_016\0"), "minifm-on-smk37");
     s.board_override = Some(&SMK37);
     let mini_pkg = package("MiniFM_016", &image_016(b"MiniFM_016\0")[..0xA9000]);
-    assert!(matches!(s.plan_firmware(&mini_pkg, false, false), Err(Error::Refused(_))));
+    assert!(matches!(s.plan_firmware(&mini_pkg, false), Err(Error::Refused(_))));
 }
 
 #[test]
@@ -297,32 +297,28 @@ fn minifm_016_vendor_package() {
     assert_eq!(a.firmware_text, "MiniFM 016 (stock)");
 
     let mut s = fm1_session(padded.clone(), "minifm-016-vendor");
-    let p = s.plan_firmware(&fm1_raw, false, false).unwrap();
+    let p = s.plan_firmware(&fm1_raw, false).unwrap();
     assert_eq!(p.warnings.len(), 1, "only the changed name: {:?}", p.warnings);
     apply(&mut s, &p).unwrap();
     assert_eq!(s.analysis.firmware_text, "FM-1 016 (stock)");
     assert_eq!(s.analysis.app_status, AppStatus::Ok);
-    let p = s.plan_firmware(&raw, false, false).unwrap();
+    let p = s.plan_firmware(&raw, false).unwrap();
     apply(&mut s, &p).unwrap();
     assert_eq!(s.dev.mem, padded, "back to the MiniFM firmware, byte for byte");
 }
 
 #[test]
-fn erasing_settings_never_erases_the_bootloader_or_the_firmware() {
-    let s = fm1_session(fm1_016_image(), "wipe-range");
+fn declared_settings_are_never_erased() {
+    let s = fm1_session(fm1_016_image(), "declared-settings");
     // a package may declare its settings anywhere: over the boot area, or over its own files
-    // (0xA8000: above its files, inside the code area it protects)
+    // (0xA8000: above its files, inside the code area it protects); only its image is written
     for vm_at in [0, BOOT_AREA, 0xA8000] {
         let raw = package("FM-1_016", &image_016_vm(b"FM-1_016\0", vm_at)[..0xA9000]);
-        match s.plan_firmware(&raw, false, true) {
-            Err(Error::Refused(t)) => assert!(t.contains("over the bootloader or its own firmware"), "{t}"),
-            _ => panic!("settings at 0x{vm_at:05X} must not be erased"),
-        }
-        // without erasing settings the package installs as any other
-        assert!(s.plan_firmware(&raw, false, false).is_ok());
+        let p = s.plan_firmware(&raw, false).unwrap();
+        assert_eq!(p.allowed, vec![(BOOT_AREA, 0xA9000)], "settings at 0x{vm_at:05X}");
+        assert_eq!(&p.target[..BOOT_AREA], &s.flash[..BOOT_AREA]);
+        assert_eq!(&p.target[0xA9000..], &s.flash[0xA9000..]);
     }
-    let p = s.plan_firmware(&package("FM-1_016", &fm1_016_image()[..0xA9000]), false, true).unwrap();
-    assert_eq!(p.allowed, vec![(BOOT_AREA, 0xA9000), (0xBA000, 0xDA000), (0xEC000, 0xED000)]);
 }
 
 #[test]
@@ -685,19 +681,19 @@ fn fm1_016_vendor_package() {
 }
 
 #[test]
-fn fm1_016_upgrade_wipe_and_downgrade() {
+fn fm1_016_upgrade_reinstall_and_downgrade() {
     let raw = need!("fm1-016.fwsc");
     let old_raw = need!("fm1-015.fwsc");
     let old = need!("fm1-stock.bin");
     let mut f = own(old.clone(), "fm1-016-upgrade");
     f.id = FM1.flash_id;
     let mut s = session_with(f);
-    let p = s.plan_firmware(&raw, false, false).unwrap();
+    let p = s.plan_firmware(&raw, false).unwrap();
     assert_eq!(p.allowed, vec![(BOOT_AREA, 0xA9000)]);
     assert!(!p.warnings.is_empty(), "the changed settings layout is reported");
     assert_eq!(&p.target[..BOOT_AREA], &old[..BOOT_AREA]);
     assert_eq!(&p.target[0xA9000..], &old[0xA9000..]);
-    let with_boot = s.plan_firmware(&raw, true, false).unwrap();
+    let with_boot = s.plan_firmware(&raw, true).unwrap();
     assert_eq!(with_boot.allowed, vec![(0, 0xA9000)]);
     assert_eq!(with_boot.target[..0xA9000], Package::parse(&raw).unwrap().flash);
     apply(&mut s, &p).unwrap();
@@ -705,16 +701,17 @@ fn fm1_016_upgrade_wipe_and_downgrade() {
     assert_eq!(s.analysis.app_status, AppStatus::Ok);
     assert_eq!(std::fs::read(s.backup_path.as_ref().unwrap()).unwrap(), old);
 
-    let before_wipe = s.dev.mem.clone();
-    let p = s.plan_firmware(&raw, false, true).unwrap();
-    assert_eq!(p.allowed, vec![(BOOT_AREA, 0xA9000), (0xBA000, 0xDA000), (0xEC000, 0xED000)]);
-    assert!(p.target[0xBA000..0xDA000].iter().all(|&b| b == 0xFF));
-    assert!(p.target[0xEC000..0xED000].iter().all(|&b| b == 0xFF));
-    assert_eq!(&p.target[0xDA000..0xEC000], &before_wipe[0xDA000..0xEC000], "sequences are kept");
-    assert_eq!(&p.target[0xFF000..], &old[0xFF000..], "the unit's own factory data is kept");
-    apply(&mut s, &p).unwrap();
+    // reinstalling it over data of its own changes nothing past the package
+    s.dev.mem[0xBA000..0xBB000].fill(0x5A);
+    s.dev.mem[0xEC000..0xED000].fill(0xA5);
+    s.flash = s.dev.mem.clone();
+    let before = s.flash.clone();
+    let p = s.plan_firmware(&raw, false).unwrap();
+    assert_eq!(p.allowed, vec![(BOOT_AREA, 0xA9000)]);
+    assert!(p.sectors.is_empty(), "the same firmware: nothing to write");
+    assert_eq!(&p.target[0xA9000..], &before[0xA9000..], "settings, pairings and sequences are kept");
 
-    let p = s.plan_firmware(&old_raw, false, false).unwrap();
+    let p = s.plan_firmware(&old_raw, false).unwrap();
     assert!(!p.warnings.is_empty());
     apply(&mut s, &p).unwrap();
     assert_eq!(s.analysis.firmware_text, "FM-1 015 (stock)");
@@ -722,9 +719,9 @@ fn fm1_016_upgrade_wipe_and_downgrade() {
     assert_eq!(&s.dev.mem[BOOT_AREA..0x93000], &old[BOOT_AREA..0x93000]);
 
     let smk = session(need!("smk37-stock.bin"));
-    assert!(matches!(smk.plan_firmware(&raw, false, false), Err(Error::Refused(_))));
+    assert!(matches!(smk.plan_firmware(&raw, false), Err(Error::Refused(_))));
     s.dev.key = 0x1234;
-    assert!(matches!(s.plan_firmware(&raw, false, false), Err(Error::Refused(_))));
+    assert!(matches!(s.plan_firmware(&raw, false), Err(Error::Refused(_))));
 }
 
 #[test]
@@ -760,7 +757,7 @@ fn fm1_016_bootloader_replacement_on_both_layouts() {
 #[test]
 fn firmware_over_snoop37() {
     let mut s = session(need!("smk37-snoop37.bin"));
-    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false, false).unwrap();
+    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false).unwrap();
     assert_eq!(p.sectors.len(), 153);
     assert!(p.sectors.iter().all(|&a| (BOOT_AREA..0x9D000).contains(&a)));
     assert!(p.warnings.is_empty());
@@ -774,22 +771,24 @@ fn firmware_over_snoop37() {
 #[test]
 fn firmware_refusals_and_warnings() {
     let s = session(need!("smk37-stock.bin"));
-    assert!(matches!(s.plan_firmware(&need!("fm1-015.fwsc"), false, false), Err(Error::Refused(_))));
+    assert!(matches!(s.plan_firmware(&need!("fm1-015.fwsc"), false), Err(Error::Refused(_))));
     let mut f = FakeFlash::new(need!("smk37-stock.bin"));
     f.key = 0x1234;
     let s = session_with(f);
-    assert!(matches!(s.plan_firmware(&need!("smk37-016.fwsc"), false, false), Err(Error::Refused(_))));
+    assert!(matches!(s.plan_firmware(&need!("smk37-016.fwsc"), false), Err(Error::Refused(_))));
     let s = session(need!("smk37-baudgirl.bin"));
-    assert!(!s.plan_firmware(&need!("smk37-016.fwsc"), false, false).unwrap().warnings.is_empty());
+    assert!(!s.plan_firmware(&need!("smk37-016.fwsc"), false).unwrap().warnings.is_empty());
 }
 
 #[test]
-fn firmware_wipe_settings() {
+fn firmware_writes_only_the_package() {
     let s = session(need!("smk37-snoop37.bin"));
-    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false, true).unwrap();
-    assert!(p.allowed.contains(&(0x9D000, 0xC0000)));
-    assert!(p.allowed.contains(&(0xC0000, 0xC1000)));
-    assert!(!p.sectors.iter().any(|&a| (0xC1000..0xC2000).contains(&a)));
+    let raw = need!("smk37-016.fwsc");
+    let end = Package::parse(&raw).unwrap().flash.len();
+    let p = s.plan_firmware(&raw, false).unwrap();
+    assert_eq!(p.allowed, vec![(BOOT_AREA, end)]);
+    assert!(p.sectors.iter().all(|&a| (BOOT_AREA..end).contains(&a)));
+    assert_eq!(&p.target[end..], &s.flash[end..], "settings, pairings and calibration are kept");
 }
 
 #[test]
@@ -853,11 +852,11 @@ fn a_restore_can_keep_the_units_bootloader() {
 #[test]
 fn write_retried_then_refused() {
     let mut s = session(need!("smk37-snoop37.bin"));
-    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false, false).unwrap();
+    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false).unwrap();
     s.dev.fail_writes = 1;
     apply(&mut s, &p).unwrap();
     let mut s = session(need!("smk37-snoop37.bin"));
-    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false, false).unwrap();
+    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false).unwrap();
     s.dev.fail_writes = usize::MAX;
     assert!(matches!(apply(&mut s, &p), Err(Error::Refused(_))));
 }
@@ -873,14 +872,14 @@ fn own_loader_reads_once_and_verifies_by_crc32() {
     let mut s = session_with(own(need!("smk37-snoop37.bin"), "1120050204010521"));
     assert_eq!(s.dev.reads, 1, "one read plus the chip's CRC32");
     assert_eq!(s.unit_id.as_deref(), Some("1120050204010521"));
-    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false, false).unwrap();
+    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false).unwrap();
     apply(&mut s, &p).unwrap();
     assert_eq!(s.dev.reads, 1, "verified by CRC32, not read back");
     let stock = need!("smk37-stock.bin");
     assert_eq!(s.dev.mem[BOOT_AREA..0x9D000], stock[BOOT_AREA..0x9D000]);
     // a corrupted program is caught by the CRC32 and rewritten
     let mut s = session_with(own(need!("smk37-snoop37.bin"), "x"));
-    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false, false).unwrap();
+    let p = s.plan_firmware(&need!("smk37-016.fwsc"), false).unwrap();
     s.dev.fail_writes = 1;
     apply(&mut s, &p).unwrap();
     assert_eq!(s.dev.mem[BOOT_AREA..0x9D000], stock[BOOT_AREA..0x9D000]);

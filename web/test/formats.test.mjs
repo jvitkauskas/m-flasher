@@ -81,21 +81,20 @@ test("a restore can't reach the boot area, key area, or the SMK-37's calibration
 
 test("a firmware of another model or chip key is refused", { skip: !need("smk37-016.fwsc") && "no test data" }, () => {
   const flash = new Uint8Array(f.FLASH_SIZE).fill(0xff);
-  assert.throws(() => planFirmware(session(flash, FM1), need("smk37-016.fwsc"), false), /for the SMK-37 Pro/);
+  assert.throws(() => planFirmware(session(flash, FM1), need("smk37-016.fwsc")), /for the SMK-37 Pro/);
   const other = session(flash, SMK37);
   other.key = 0x1234;
-  assert.throws(() => planFirmware(other, need("smk37-016.fwsc"), false), /chip key/);
-  const plan = planFirmware(session(flash, SMK37), need("smk37-016.fwsc"), false);
+  assert.throws(() => planFirmware(other, need("smk37-016.fwsc")), /chip key/);
+  const plan = planFirmware(session(flash, SMK37), need("smk37-016.fwsc"));
   assert.ok(plan.sectors.length > 0 && plan.sectors[0] >= 0x4000);
 });
 
-test("wiping settings erases the regions the package declares", { skip: !need("fm1-015.fwsc") && "no test data" }, () => {
+test("installing firmware writes only the package", { skip: !need("fm1-015.fwsc") && "no test data" }, () => {
   const flash = new Uint8Array(f.FLASH_SIZE).fill(0x77);
-  const plan = planFirmware(session(flash, FM1), need("fm1-015.fwsc"), true);
-  assert.equal(plan.target[0x93000], 0xff);
-  assert.equal(plan.target[0xe9000], 0xff);
-  assert.equal(plan.target[0xff000], 0x77);
-  assert.equal(plan.target[0], 0x77);
+  const plan = planFirmware(session(flash, FM1), need("fm1-015.fwsc"));
+  assert.ok(plan.target.subarray(0x93000).every((b) => b === 0x77), "settings, pairings and the rest are kept");
+  assert.ok(plan.target.subarray(0, f.BOOT_AREA).every((b) => b === 0x77), "the bootloader stays");
+  assert.ok(plan.sectors.every((a) => a >= f.BOOT_AREA && a < 0x93000));
 });
 
 test("only firmware with its own updater is kept from the update route", () => {

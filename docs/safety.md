@@ -22,8 +22,6 @@ backup can repair.
   is made to put it on the disk before anything is erased.
 - A backup to restore is checked against the SHA-256 saved with it (in its
   `.json`); one that no longer matches is refused.
-- Erasing settings with a firmware package is refused where the package
-  declares them over the bootloader, its own firmware or the factory data.
 - A choice changed after the plan was made is planned again before anything
   is written.
 
@@ -43,6 +41,8 @@ backup can repair.
 
 **What it cannot fix for you**
 
+- An install writes only what the package holds, as the firmwares' own
+  installers do, and erases nothing else.
 - Firmwares keep their settings and data in different places. When the
   installed firmware's layout differs from the package's (Baud Girl, for
   example, keeps its settings inside the stock presets area), the app warns

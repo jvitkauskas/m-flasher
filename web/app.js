@@ -405,7 +405,7 @@ async function installFirmware() {
     await attempt(() => installOnLoader(data));
     return;
   }
-  await attempt(() => applyPlan(planFirmware(session(), data, $("wipe").checked)));
+  await attempt(() => applyPlan(planFirmware(session(), data)));
 }
 
 async function attempt(what) {
@@ -478,7 +478,6 @@ function render() {
   $("actions").hidden = state.mode === "none";
   $("connect-button").textContent = state.access ? "Look again" : "Connect";
   $("connect-button").disabled = state.busy;
-  $("wipe-row").hidden = !state.flash;
   const facts = [];
   const notes = [];
   if (hasOwnUpdater(state.identity)) {

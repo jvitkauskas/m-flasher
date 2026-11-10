@@ -95,7 +95,7 @@ stock firmware takes about half a minute).
 | --- | --- |
 | **Back up the whole flash** | nothing: saves the 1 MiB flash image and a `.json` describing it |
 | **Restore a backup** | the parts that differ; a backup of another unit keeps this unit's own factory data (calibration, Bluetooth address). With **Keep this unit's bootloader**, not the boot area (16 KiB): an older backup then leaves a newer m-bootloader in place |
-| **Install firmware (.fwsc)** | the firmware from an M-VAVE package (or a custom one in the same format); optionally the package's stock bootloader, and optionally erasing the settings and Bluetooth pairings |
+| **Install firmware (.fwsc)** | the firmware from an M-VAVE package (or a custom one in the same format); optionally the package's stock bootloader. Nothing outside the package is erased |
 | **Install m-bootloader** | the boot area only (16 KiB), the build for the identified model; of the unit's boot configuration, which it does not read, only the chip key that firmware installers need is kept |
 | **Put back the stock bootloader** | the boot area only, all of it from an official package, the full configuration included |
 
@@ -108,13 +108,14 @@ change for review, as any write; **No** leaves the unit as it is, and
 
 Use the official `.fwsc` files from M-VAVE's website as they are: no
 conversion is needed. FM-1 **016** is supported, including its DX7 data file
-and new settings and sequencer layout. Erasing settings clears settings and
-Bluetooth pairings at the addresses declared by the package; saved sequences
-are kept. The window starts with **Also erase settings and Bluetooth
-pairings** ticked, because custom firmwares do not always read each other's
-data correctly; untick it to keep them when reinstalling the same firmware (the
-command line erases them only with `--wipe-settings`). When switching between 015 and 016, the app warns about the changed
-data layout. Restore a backup to return to the earlier firmware with its data.
+and new settings and sequencer layout. An install writes the package's flash
+image and nothing else: settings, Bluetooth pairings, presets and sequences stay
+as they are, as with M-VAVE's updater and the custom firmwares' own installers.
+Custom firmwares keep data in places of their own, some of it inside what stock
+firmware declares as its settings area, so there is no erasing that would be
+right for all of them. When switching between 015 and 016, or between firmwares
+whose data layouts differ, the app warns. Restore a backup to return to the
+earlier firmware with its data.
 
 The **Fame MiniFM** is treated as an FM-1, and either's package installs on the
 other: `MiniFM_016` and `FM-1_016` have the same chip key, data layout and boot
@@ -163,7 +164,7 @@ m-flasher restart              # leave download mode: the unit resets and starts
 m-flasher info                 # what is on the unit
 m-flasher backup [DIR]
 m-flasher restore BACKUP.bin
-m-flasher firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings]
+m-flasher firmware PACKAGE.fwsc [--with-bootloader]
 m-flasher bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot]
 m-flasher run-ram IMAGE --addr 0x01C28000 [--call FC60]... [--read ADDR:LEN -o OUT]
 ```

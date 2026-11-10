@@ -396,9 +396,6 @@ impl eframe::App for App {
                 if file_row(&p, "FIRMWARE FILE", st.file(FileKind::Firmware), "CHOOSE FILE", "choosefw") {
                     self.ctl.choose_file(FileKind::Firmware);
                 }
-                if checkbox(ui, &p, 56.0, 713.0, "Also erase settings and Bluetooth pairings", st.wipe, active) {
-                    self.ctl.set_wipe(!st.wipe);
-                }
                 if checkbox(ui, &p, 56.0, 743.0, "Also put back the package's stock bootloader", st.with_boot, active) {
                     self.ctl.set_with_boot(!st.with_boot);
                 }

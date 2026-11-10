@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! m-flasher find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin [--keep-bootloader]
-//!           firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings]
+//!           firmware PACKAGE.fwsc [--with-bootloader]
 //!           bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot]
 //!           run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT]
 //! options:  --device PATH  --board fm1|smk37  --backup-dir DIR  --yes
@@ -16,7 +16,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: m-flasher [find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin [--keep-bootloader] |
-                 firmware PACKAGE.fwsc [--with-bootloader] [--wipe-settings] |
+                 firmware PACKAGE.fwsc [--with-bootloader] |
                  bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot] |
                  run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT]]
        options: --device PATH  --board fm1|smk37  --backup-dir DIR  --yes
@@ -273,7 +273,7 @@ pub fn run(args: Vec<String>) -> i32 {
 
 fn main(args: Vec<String>) -> Result<(), Error> {
     let (mut pos, mut device, mut board, mut backup_dir, mut yes) = (vec![], None, None, default_backup_dir(), false);
-    let (mut with_boot, mut wipe, mut stock, mut file, mut then_restart) = (false, false, None, None, false);
+    let (mut with_boot, mut stock, mut file, mut then_restart) = (false, None, None, false);
     let mut keep_boot = false;
     let (mut ram_addr, mut calls, mut read_spec, mut output) = (None, vec![], None, None);
     let mut it = args.into_iter();
@@ -291,7 +291,11 @@ fn main(args: Vec<String>) -> Result<(), Error> {
             "-o" | "--output" => output = Some(val("-o")?),
             "--yes" => yes = true,
             "--with-bootloader" => with_boot = true,
-            "--wipe-settings" => wipe = true,
+            "--wipe-settings" => {
+                return Err(Error::Refused("--wipe-settings was removed: installing firmware no longer erases data \
+                                           outside the package, as the firmwares' own installers don't"
+                    .into()));
+            }
             "--keep-bootloader" => keep_boot = true,
             "--restart" => then_restart = true,
             "--version" => {
@@ -389,7 +393,7 @@ fn main(args: Vec<String>) -> Result<(), Error> {
             crate::ops::check_backup_file(std::path::Path::new(f), &data)?;
             s.plan_restore(&data, crate::ops::backup_unit_id(std::path::Path::new(f)).as_deref(), keep_boot)?
         }
-        "firmware" => s.plan_firmware(&read(pos.get(1).ok_or_else(|| Error::Refused(USAGE.into()))?)?, with_boot, wipe)?,
+        "firmware" => s.plan_firmware(&read(pos.get(1).ok_or_else(|| Error::Refused(USAGE.into()))?)?, with_boot)?,
         _ => match (stock, file) {
             (Some(p), _) => s.plan_bootloader(None, Some(&read(&p)?))?,
             (_, Some(f)) => s.plan_bootloader(Some(&read(&f)?), None)?,
