@@ -254,7 +254,7 @@ impl<F: Flash> Session<F> {
             .map(|i| dir.join(if i == 1 { format!("{model}-{stamp}.bin") } else { format!("{model}-{stamp}-{i}.bin") }))
             .find(|p| !p.exists() && !p.with_extension("json").exists())
             .unwrap();
-        std::fs::write(&path, &self.flash).map_err(|e| Error::Io(format!("cannot write {}: {e}", path.display())))?;
+        write_synced(&path, &self.flash)?;
         let mut json = String::from("{\n");
         for (k, v) in self.info() {
             json += &format!("  \"{k}\": \"{}\",\n", v.replace('\\', "\\\\").replace('"', "\\\""));
@@ -262,7 +262,7 @@ impl<F: Flash> Session<F> {
         let sha: String = Sha256::digest(&self.flash).iter().map(|b| format!("{b:02x}")).collect();
         json += &format!("  \"sha256\": \"{sha}\",\n");
         json += &format!("  \"saved\": \"{stamp}\",\n  \"tool\": \"m-flasher {}\"\n}}\n", env!("CARGO_PKG_VERSION"));
-        std::fs::write(path.with_extension("json"), json).map_err(|e| Error::Io(e.to_string()))?;
+        write_synced(&path.with_extension("json"), json.as_bytes())?;
         give_to_sudo_user(&path);
         give_to_sudo_user(&path.with_extension("json"));
         self.backup_path = Some(path.clone());
@@ -384,12 +384,23 @@ impl<F: Flash> Session<F> {
             notes.push("Also puts back the package's (stock) bootloader.".into());
         }
         if wipe_settings {
-            for e in app_table(&padded, key) {
+            // what the package itself installs: the boot area, the app's file
+            // table and its files. A package can declare its settings anywhere,
+            // and erasing them must never erase those.
+            let table = app_table(&padded, key);
+            let installed = table.iter().filter(|e| e.attr == 0x82)
+                .map(|e| BOOT_AREA + e.addr as usize + e.len as usize)
+                .fold(BOOT_AREA + 32 * table.len(), usize::max);
+            for e in &table {
                 let (a, n) = (e.addr as usize, e.len as usize);
                 if (e.name == "VM" || e.name == "BTIF") && (e.attr == 0x12 || e.attr == 0x92) && n > 0
                     && a % SECTOR == 0 && a + n <= FLASH_SIZE {
                     if board.factory.iter().any(|&(fa, fb)| fa < a + n && a < fb) {
                         return refuse(format!("the package declares {} over factory data", e.name));
+                    }
+                    if a < installed {
+                        return refuse(format!("the package declares {} (0x{a:05X}) over the bootloader or its own firmware \
+                                               (up to 0x{:05X}): erasing it would erase those", e.name, installed - 1));
                     }
                     target[a..a + n].fill(0xFF);
                     allowed.push((a, a + n));
@@ -548,6 +559,35 @@ impl<F: Flash> Session<F> {
         });
         Ok(())
     }
+}
+
+/// Writes a file and has the system put it on the disk before returning: a
+/// backup must survive the computer losing power during the write it precedes.
+fn write_synced(path: &Path, data: &[u8]) -> Result<(), Error> {
+    use std::io::Write;
+    let io = |e: std::io::Error| Error::Io(format!("cannot write {}: {e}", path.display()));
+    let mut f = std::fs::File::create(path).map_err(io)?;
+    f.write_all(data).map_err(io)?;
+    f.sync_all().map_err(io)
+}
+
+/// Checks a backup file against the SHA-256 saved with it in its .json (none
+/// saved, as with a backup from elsewhere: nothing to check).
+pub fn check_backup_file(backup: &Path, data: &[u8]) -> Result<(), Error> {
+    let json_path = backup.with_extension("json");
+    let Ok(json) = std::fs::read_to_string(&json_path) else { return Ok(()) };
+    let Some(saved) = json.split("\"sha256\": \"").nth(1).and_then(|r| r.split('"').next()) else { return Ok(()) };
+    if saved.len() != 64 || !saved.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    let sha: String = Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect();
+    if !sha.eq_ignore_ascii_case(saved) {
+        return refuse(format!(
+            "{} is not the file that was saved: its SHA-256 differs from the one in {}. The backup is damaged or was \
+             changed. Use another backup; if you changed it on purpose, remove that .json file.",
+            backup.display(), json_path.display()));
+    }
+    Ok(())
 }
 
 /// The unit ID saved in a backup's .json, if any.

@@ -256,7 +256,7 @@ pub fn bootloader_identity(boot: &[u8]) -> Option<(String, String)> {
 pub fn config_sys_clk(flash: &[u8]) -> Option<u32> {
     let t = boot_table(flash);
     let e = t.iter().find(|e| e.name == "isd_config.ini")?;
-    let c = flash.get(e.addr as usize..(e.addr + e.len) as usize)?;
+    let c = flash.get(e.addr as usize..e.addr as usize + e.len as usize)?;
     const KEY: &[u8] = b"SYS_CLK\0";
     let at = c.windows(KEY.len()).position(|w| w == KEY)? + KEY.len();
     (at + 4 <= c.len()).then(|| u32le(c, at))

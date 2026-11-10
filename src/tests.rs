@@ -141,6 +141,11 @@ fn fm1_016_image() -> Vec<u8> {
 
 /// The same directory, with the firmware calling itself `identity`.
 fn image_016(identity: &[u8]) -> Vec<u8> {
+    image_016_vm(identity, 0xBA000)
+}
+
+/// The same again, declaring its settings (VM) at `vm_at`.
+fn image_016_vm(identity: &[u8], vm_at: usize) -> Vec<u8> {
     let mut flash = vec![0xFF; FLASH_SIZE];
     let mut app = vec![0xFF; 0x1C0];
     let files: [(&str, usize, &[u8]); 3] = [
@@ -152,7 +157,7 @@ fn image_016(identity: &[u8]) -> Vec<u8> {
         entries.push((name, 0x82, at, data.len(), crc16(data)));
     }
     entries.extend([
-        ("VM", 0x12, 0xBA000, 0x20000, 0xFFFF), ("PRCT", 0x92, 0, 0xA9000, 0xFFFF),
+        ("VM", 0x12, vm_at, 0x20000, 0xFFFF), ("PRCT", 0x92, 0, 0xA9000, 0xFFFF),
         ("SEQ64", 0x92, 0xDA000, 0x12000, 0xFFFF), ("BTIF", 0x92, 0xEC000, 0x1000, 0xFFFF),
     ]);
     for (i, (name, attr, addr, len, dcrc)) in entries.iter().enumerate() {
@@ -300,6 +305,43 @@ fn minifm_016_vendor_package() {
     let p = s.plan_firmware(&raw, false, false).unwrap();
     apply(&mut s, &p).unwrap();
     assert_eq!(s.dev.mem, padded, "back to the MiniFM firmware, byte for byte");
+}
+
+#[test]
+fn erasing_settings_never_erases_the_bootloader_or_the_firmware() {
+    let s = fm1_session(fm1_016_image(), "wipe-range");
+    // a package may declare its settings anywhere: over the boot area, or over its own files
+    for vm_at in [0, BOOT_AREA] {
+        let raw = package("FM-1_016", &image_016_vm(b"FM-1_016\0", vm_at)[..0xA9000]);
+        match s.plan_firmware(&raw, false, true) {
+            Err(Error::Refused(t)) => assert!(t.contains("over the bootloader or its own firmware"), "{t}"),
+            _ => panic!("settings at 0x{vm_at:05X} must not be erased"),
+        }
+        // without erasing settings the package installs as any other
+        assert!(s.plan_firmware(&raw, false, false).is_ok());
+    }
+    let p = s.plan_firmware(&package("FM-1_016", &fm1_016_image()[..0xA9000]), false, true).unwrap();
+    assert_eq!(p.allowed, vec![(BOOT_AREA, 0xA9000), (0xBA000, 0xDA000), (0xEC000, 0xED000)]);
+}
+
+#[test]
+fn a_backup_that_no_longer_matches_its_checksum_is_refused() {
+    let dir = std::env::temp_dir().join(format!("mflasher-sha-{}", std::process::id()));
+    let mut s = session(vec![0xFF; 0x100000]);
+    let path = s.save_backup(Some(&dir)).unwrap();
+    let mut data = std::fs::read(&path).unwrap();
+    crate::ops::check_backup_file(&path, &data).unwrap();
+    data[0x1234] ^= 1;
+    match crate::ops::check_backup_file(&path, &data) {
+        Err(Error::Refused(t)) => assert!(t.contains("SHA-256"), "{t}"),
+        _ => panic!("a changed backup must be refused"),
+    }
+    // a backup without a .json (from elsewhere), or one without a checksum: nothing to check
+    std::fs::write(path.with_extension("json"), "{\n  \"model\": \"FM-1\"\n}\n").unwrap();
+    crate::ops::check_backup_file(&path, &data).unwrap();
+    std::fs::remove_file(path.with_extension("json")).unwrap();
+    crate::ops::check_backup_file(&path, &data).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A flash whose boot area holds `boot`.
@@ -889,6 +931,12 @@ pub struct MockRom {
     pub lose_jump: bool,
     /// This many FB06 commands fail.
     pub fail_uploads: usize,
+    /// This many FB08 commands fail before the unit gets them.
+    pub fail_jumps: usize,
+    /// This many FB08 commands start the loader, but their answer is lost.
+    pub lose_jump_answers: usize,
+    /// The inquiry's answer is this many bytes short (a transport out of step).
+    pub short_inquiry: usize,
     /// This many inquiries fail (out of step, as on macOS after its disk driver).
     pub fail_inquiries: usize,
     /// This many FC40 commands fail (a transfer error).
@@ -918,7 +966,7 @@ impl Scsi for MockRom {
                 b[8..12].copy_from_slice(b"WL82");
                 b[16..25].copy_from_slice(b"UBOOT1.00");
             }
-            return Ok(36);
+            return Ok(36 - self.short_inquiry);
         }
         let op = u16::from_be_bytes([cdb[0], cdb[1]]);
         match data {
@@ -935,6 +983,10 @@ impl Scsi for MockRom {
                 self.log.push((cdb.to_vec(), vec![]));
                 if op == 0xFB08 && self.lose_jump {
                     return Err(ScsiError::Failed("No such device".into()));
+                }
+                if op == 0xFB08 && self.fail_jumps > 0 {
+                    self.fail_jumps -= 1;
+                    return Err(ScsiError::Failed("transfer failed".into()));
                 }
                 if op == 0xFD61 {
                     if self.fail_reads > 0 {
@@ -970,6 +1022,10 @@ impl Scsi for MockRom {
                             self.loader = Some((bundled_version(), at));
                             self.no_flash = self.no_flash_starts > 0;
                             self.no_flash_starts = self.no_flash_starts.saturating_sub(1);
+                            if self.lose_jump_answers > 0 {
+                                self.lose_jump_answers -= 1;
+                                return Err(ScsiError::Failed("transfer failed".into()));
+                            }
                         }
                         0xFD05 if self.no_flash => {
                             self.last_error = 3;
@@ -1036,6 +1092,31 @@ fn a_running_loader_without_flash_is_started_again_in_the_other_slot() {
         assert!(log.iter().any(|l| l.contains("found no flash chip")), "{log:?}");
         assert_eq!(c.flash_id(), 0xB36014);
         assert_eq!(c.read(0, 32, &mut |_| {}).unwrap().len(), 32);
+    }
+}
+
+#[test]
+fn a_loader_that_started_is_not_jumped_into_again() {
+    // the jump's answer is lost, but the loader runs: asked, it answers from its slot
+    let (log, c) = start(MockRom { lose_jump_answers: 1, ..Default::default() });
+    let c = c.ok().unwrap();
+    assert_eq!(jumps(&c), vec![SLOT_A], "one jump: {log:?}");
+    assert_eq!(c.retries().0, 0);
+    // the jump never reached the unit: no loader answers, and it is sent again
+    let (log, c) = start(MockRom { fail_jumps: 2, ..Default::default() });
+    let c = c.ok().unwrap();
+    assert_eq!(jumps(&c), vec![SLOT_A; 3], "{log:?}");
+    assert!(c.retries().1.starts_with("starting the loader"), "{:?}", c.retries());
+    let (_, c) = start(MockRom { fail_jumps: 3, ..Default::default() });
+    assert!(matches!(c, Err(ScsiError::Failed(t)) if t.contains("starting the loader")));
+}
+
+#[test]
+fn an_inquiry_cut_short_is_a_failed_transfer() {
+    // not the unit's names: tried again, as any failed transfer, then an error that says so
+    match Connection::open("/dev/fake", MockRom { short_inquiry: 23, ..Default::default() }) {
+        Err(ScsiError::Failed(t)) => assert!(t.contains("13 of 36 bytes"), "{t}"),
+        _ => panic!("13 bytes are not an inquiry's answer"),
     }
 }
 
