@@ -10,7 +10,7 @@
 use crate::boards::{Analysis, BOARDS, Board, BootKind, CHIP_KEY, FLASH_SIZE, flash_tested, flash_text};
 use crate::formats::{
     AppStatus, BOOT_AREA, Package, SECTOR, app_files_status, crc32, app_table, bankcb_check, bootloader_identity,
-    build_boot_area, build_short_boot_area, config_cut_short, config_sys_clk, reads_config, stored_bootloader,
+    build_boot_area, build_short_boot_area, check_boot_area, config_cut_short, config_sys_clk, reads_config, stored_bootloader,
 };
 use crate::jl::{Flash, Show};
 use crate::scsi::ScsiError;
@@ -43,6 +43,15 @@ impl From<ScsiError> for Error {
 
 fn refuse<T>(s: impl Into<String>) -> Result<T, Error> {
     Err(Error::Refused(s.into()))
+}
+
+/// Refuses a package whose boot area would leave the unit unable to start if
+/// written: custom firmware packages may carry only a stand-in there.
+fn bootable_package_boot_area(pkg: &Package) -> Result<(), Error> {
+    check_boot_area(&pkg.flash).map_err(|e| Error::Refused(format!(
+        "the boot area of {} can't start the unit: {}. Custom firmware packages often carry only a stand-in \
+         there, which their own installers never write. Install the firmware without the bootloader, and put back \
+         the stock bootloader from an official M-VAVE package", pkg.identity, e.0)))
 }
 
 pub fn bundled_bootloader(board: &Board) -> Result<(&'static [u8], String), Error> {
@@ -385,6 +394,9 @@ impl<F: Flash> Session<F> {
                                    firmware cleanly, restore a backup made while it was installed.",
                                   self.analysis.firmware_text, pkg.identity));
         }
+        if with_bootloader {
+            bootable_package_boot_area(&pkg)?;
+        }
         let start = if with_bootloader { 0 } else { BOOT_AREA };
         let end = pkg.flash.len();
         let mut target = self.flash.clone();
@@ -392,7 +404,7 @@ impl<F: Flash> Session<F> {
         let allowed = vec![(start, end)];
         notes.push(format!("Installs {} ({}).", pkg.identity, ranges_text(&allowed)));
         if with_bootloader {
-            notes.push("Also puts back the package's (stock) bootloader.".into());
+            notes.push("Also puts back the package's stock bootloader: its whole boot area.".into());
         }
         Plan::new(format!("Install firmware {}", pkg.identity), &self.flash, target, allowed, notes, warnings)
     }
@@ -409,6 +421,7 @@ impl<F: Flash> Session<F> {
             if !board.models.contains(&pkg.model()) {
                 return refuse(format!("this package is for the {}, the connected unit is a {}", pkg.model(), board.name));
             }
+            bootable_package_boot_area(&pkg)?;
             let b = stored_bootloader(&pkg.flash).ok_or_else(|| Error::Refused("the package has no readable bootloader".into()))?;
             // its boot area replaces the unit's, chip-key record included
             let key = self.dev.chip_key();

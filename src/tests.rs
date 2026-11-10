@@ -361,7 +361,7 @@ fn with_boot_area(mut flash: Vec<u8>, boot: &[u8]) -> Vec<u8> {
     let crc = crc16(&head[2..]);
     head[..2].copy_from_slice(&crc.to_le_bytes());
     flash[..32].copy_from_slice(&enc(&head, 0xFFFF));
-    let table: [(&str, u32, u32); 3] = [("uboot.boot", BOOT_AT as u32, 16), ("isd_config.ini", 0x3938, 64), ("app_dir_head", 0x4000, 0)];
+    let table: [(&str, u32, u32); 3] = [("uboot.boot", BOOT_AT as u32, 16), ("isd_config.ini", 0x3938, 0x100), ("app_dir_head", 0x4000, 0)];
     for (i, (name, addr, len)) in table.iter().enumerate() {
         let mut e = [0u8; 32];
         e[4..8].copy_from_slice(&addr.to_le_bytes());
@@ -377,7 +377,19 @@ fn with_boot_area(mut flash: Vec<u8>, boot: &[u8]) -> Vec<u8> {
     flash[0x3958..0x395A].copy_from_slice(&crc16(&key).to_le_bytes());
     let area = build_boot_area(&flash, boot).unwrap();
     flash[..BOOT_AREA].copy_from_slice(&area);
+    set_config_crc(&mut flash);
     flash
+}
+
+/// The boot configuration's checksum in its file table entry, after its data changed.
+fn set_config_crc(flash: &mut [u8]) {
+    let mut e = enc(&flash[0x40..0x60], 0xFFFF);
+    let (at, len) = (u32::from_le_bytes(e[4..8].try_into().unwrap()) as usize, u32::from_le_bytes(e[8..12].try_into().unwrap()) as usize);
+    let crc = crc16(&flash[at..at + len]);
+    e[2..4].copy_from_slice(&crc.to_le_bytes());
+    let crc = crc16(&e[2..]);
+    e[..2].copy_from_slice(&crc.to_le_bytes());
+    flash[0x40..0x60].copy_from_slice(&enc(&e, 0xFFFF));
 }
 
 #[test]
@@ -552,6 +564,58 @@ fn stock_boot() -> Vec<u8> {
     b
 }
 
+/// Whether a plan was refused because the package's boot area can't start the unit.
+fn refused_boot_area(r: Result<Plan, Error>) -> bool {
+    matches!(&r, Err(Error::Refused(m)) if m.contains("can't start the unit"))
+}
+
+#[test]
+fn a_package_boot_area_that_cannot_start_the_unit_is_not_written() {
+    // a unit with the stock bootloader and its full configuration
+    let unit = with_boot_area(fm1_016_image(), &stock_boot());
+    let good = package("FM-1_016", &unit[..0xA9000]);
+    let s = fm1_on(unit.clone());
+    assert!(s.plan_firmware(&good, true).is_ok());
+    assert!(s.plan_bootloader(None, Some(&good)).is_ok());
+
+    let broken = |change: &dyn Fn(&mut Vec<u8>)| {
+        let mut img = unit[..0xA9000].to_vec();
+        change(&mut img);
+        package("FM-1_016", &img)
+    };
+    // as Felucca's builder leaves it: the bootloader's checksum fails
+    let bad_boot = broken(&|img| img[BOOT_AT + 0x100] ^= 0xFF);
+    // a configuration of only the chip key, for a bootloader that reads all of it
+    let key_only = broken(&|img| {
+        let mut e = enc(&img[0x40..0x60], 0xFFFF);
+        e[8..12].copy_from_slice(&(CONFIG_KEY as u32).to_le_bytes());
+        let crc = crc16(&e[2..]);
+        e[..2].copy_from_slice(&crc.to_le_bytes());
+        img[0x40..0x60].copy_from_slice(&enc(&e, 0xFFFF));
+        set_config_crc(img);
+    });
+    // a configuration that fails its checksum, or a damaged chip-key record
+    let bad_config = broken(&|img| img[0x3938 + 0x80] ^= 0xFF);
+    let bad_key = broken(&|img| {
+        img[0x3938] ^= 0xFF;
+        set_config_crc(img);
+    });
+    for pkg in [&bad_boot, &key_only, &bad_config, &bad_key] {
+        assert!(refused_boot_area(s.plan_firmware(pkg, true)));
+        assert!(refused_boot_area(s.plan_bootloader(None, Some(pkg))));
+        // the firmware alone still installs, the unit's boot area kept
+        let p = s.plan_firmware(pkg, false).unwrap();
+        assert_eq!(p.target[..BOOT_AREA], unit[..BOOT_AREA]);
+    }
+    // a real Felucca-family package, if given
+    if let Some(raw) = data("fm1-felucca.fwsc") {
+        let s = fm1_session(need!("fm1-stock.bin"), "felucca");
+        assert!(refused_boot_area(s.plan_firmware(&raw, true)));
+        assert!(refused_boot_area(s.plan_bootloader(None, Some(&raw))));
+        assert!(s.plan_firmware(&raw, false).is_ok());
+    }
+}
+
 #[test]
 fn the_stock_bootloader_comes_with_the_packages_whole_boot_area() {
     // a stock bootloader; a package with its own full configuration
@@ -559,6 +623,7 @@ fn the_stock_bootloader_comes_with_the_packages_whole_boot_area() {
     let mut with_config = with_boot_area(fm1_016_image(), &stock);
     with_config[0x3938 + 40..0x3938 + 48].copy_from_slice(b"SYS_CLK\0");
     with_config[0x3938 + 48..0x3938 + 52].copy_from_slice(&360_000_000u32.to_le_bytes());
+    set_config_crc(&mut with_config);
     let pkg = package("FM-1_016", &with_config[..0xA9000]);
 
     let mut s = fm1_on(with_config.clone());
