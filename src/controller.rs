@@ -780,7 +780,12 @@ impl Controller {
     pub fn open_backups(&self) {
         let dir = self.shared.lock().unwrap().backup_dir.clone();
         let _ = crate::ops::create_dirs(&dir);
-        open_folder(&dir);
+        shell_open(dir.as_os_str());
+    }
+
+    /// A web page, in the user's browser.
+    pub fn open_link(&self, url: &str) {
+        shell_open(std::ffi::OsStr::new(url));
     }
 
     fn refresh_backups(&self) {
@@ -790,22 +795,23 @@ impl Controller {
     }
 }
 
-/// Through the shell, not by running "explorer": Windows would look for that
-/// next to this executable first, and start what it finds as administrator.
-/// On its own thread, as the shell can take a while, and it wants COM there.
+/// A folder or a web page, in the file manager or the browser. Through the
+/// shell, not by running "explorer": Windows would look for that next to this
+/// executable first, and start what it finds as administrator. On its own
+/// thread, as the shell can take a while, and it wants COM there.
 #[cfg(windows)]
-fn open_folder(dir: &Path) {
+fn shell_open(target: &std::ffi::OsStr) {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     const SW_SHOWNORMAL: i32 = 1;
-    let dir: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let target: Vec<u16> = target.encode_wide().chain(std::iter::once(0)).collect();
     std::thread::spawn(move || {
         let open: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
         // SAFETY: both are valid NUL-terminated strings; the rest may be null.
         unsafe {
             let com = CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32);
-            ShellExecuteW(std::ptr::null_mut(), open.as_ptr(), dir.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+            ShellExecuteW(std::ptr::null_mut(), open.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
             if com >= 0 {
                 CoUninitialize();
             }
@@ -814,10 +820,10 @@ fn open_folder(dir: &Path) {
 }
 
 #[cfg(not(windows))]
-fn open_folder(dir: &Path) {
+fn shell_open(target: &std::ffi::OsStr) {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     let mut cmd = match std::env::var("SUDO_USER") {
-        // run with sudo: the file manager opens as the user, not as root
+        // run with sudo: the file manager or browser opens as the user, not as root
         Ok(user) => {
             let mut c = std::process::Command::new("sudo");
             c.args(["-u", &user, opener]);
@@ -825,7 +831,7 @@ fn open_folder(dir: &Path) {
         }
         _ => std::process::Command::new(opener),
     };
-    let _ = cmd.arg(dir).spawn();
+    let _ = cmd.arg(target).spawn();
 }
 
 fn device_view(u: &Unit) -> DeviceView {
