@@ -266,7 +266,8 @@ impl<S: Scsi> Connection<S> {
         };
         log(format!("Starting the M-Flasher loader {bundled}"));
         let scrambled: Vec<Vec<u8>> = image.chunks(512).map(|b| crc_cipher(b, 0xFFFF_FFFF)).collect();
-        self.upload_and_jump(addr, &scrambled)?;
+        self.upload(addr, &scrambled)?;
+        self.jump_to_loader(addr)?;
         match self.identify() {
             Some((v, _)) => {
                 self.own = v;
@@ -307,13 +308,37 @@ impl<S: Scsi> Connection<S> {
         Ok(())
     }
 
-    fn upload_and_jump(&mut self, addr: u32, blocks: &[Vec<u8>]) -> Result<(), ScsiError> {
-        self.upload(addr, blocks)?;
+    /// Starts the loader uploaded at `addr`. A jump whose answer was lost may
+    /// have started it all the same, and a loader that is running is not
+    /// jumped into again: after a failure the jump is sent again only if no
+    /// loader of ours answers from `addr`.
+    fn jump_to_loader(&mut self, addr: u32) -> Result<(), ScsiError> {
+        const TRIES: u32 = 3;
         let mut args = addr.to_be_bytes().to_vec();
         args.extend(LOADER_ARG.to_be_bytes());
-        self.call(JUMP, &args)?;
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        Ok(())
+        let c = cdb(JUMP, &args);
+        for attempt in 1..=TRIES {
+            let mut resp = [0u8; 16];
+            let e = match self.dev.execute(&c, Data::In(&mut resp)) {
+                Ok(_) if u16::from_be_bytes([resp[0], resp[1]]) == JUMP => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    return Ok(());
+                }
+                Ok(_) => format!("unexpected answer to command 0x{JUMP:04x}"),
+                Err(ScsiError::NeedsAdmin(e)) => return Err(ScsiError::NeedsAdmin(e)),
+                Err(ScsiError::Failed(e) | ScsiError::Refused(e)) => e,
+            };
+            std::thread::sleep(std::time::Duration::from_millis(250 * attempt as u64));
+            if self.identify().is_some_and(|(_, at)| at == addr) {
+                return Ok(());
+            }
+            if attempt == TRIES {
+                return Err(ScsiError::Failed(format!("starting the loader: {e} (tried {TRIES} times)")));
+            }
+            self.retried += 1;
+            self.last_retry = format!("starting the loader: {e}");
+        }
+        unreachable!()
     }
 
     /// A flash command, tried up to RETRIES times: a failed transfer (Windows
