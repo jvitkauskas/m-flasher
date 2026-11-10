@@ -184,7 +184,13 @@ impl<S: Scsi> Connection<S> {
         // What is running already? A loader stays registered until the unit is
         // switched off. (Commands the ROM alone does not know just fail.)
         let ours_running = c.identify();
-        if ours_running.is_none() && c.call(ONLINE_DEVICE, &[]).is_ok() {
+        // only a refusal says no other loader runs: a transfer that keeps failing says nothing
+        let other_loader = ours_running.is_none() && match c.probe(ONLINE_DEVICE) {
+            Ok(_) => true,
+            Err(ScsiError::Refused(_)) => false,
+            Err(e) => return Err(e),
+        };
+        if other_loader {
             // another tool's loader (JieLi's): jumping through it is not safe
             return Err(ScsiError::Failed(
                 "another flash loader is running on the unit: switch it off and on in download mode, then connect again".into()));
@@ -230,7 +236,7 @@ impl<S: Scsi> Connection<S> {
 
     /// Our loader's (version, address), if it is the one answering.
     fn identify(&mut self) -> Option<(String, u32)> {
-        let r = self.call(IDENTIFY, &[]).ok()?;
+        let r = self.probe(IDENTIFY).ok()?;
         (&r[..4] == b"MFLR").then(|| {
             (String::from_utf8_lossy(&r[4..7]).trim_end_matches('\0').to_string(),
              u32::from_be_bytes([r[8], r[9], r[10], r[11]]))
@@ -298,21 +304,30 @@ impl<S: Scsi> Connection<S> {
     }
 
     /// A flash command, tried up to RETRIES times: a failed transfer (Windows
-    /// reports USB hiccups as error 31) is sent again after a pause. Reading,
-    /// erasing and programming the same data again are all harmless.
-    fn retry(&mut self, what: &str, mut f: impl FnMut(&mut S) -> Result<(), ScsiError>) -> Result<(), ScsiError> {
+    /// reports USB hiccups as error 31) is sent again after a pause, and so is
+    /// a refused one (data a hiccup spoilt can be refused). Reading, erasing and
+    /// programming the same data again are all harmless.
+    fn retry(&mut self, what: &str, f: impl FnMut(&mut S) -> Result<(), ScsiError>) -> Result<(), ScsiError> {
+        self.attempts(what, false, f)
+    }
+
+    /// As `retry`; with `refusal_answers`, a refusal is the answer (a probe for
+    /// a command the unit may not know) and is not sent again.
+    fn attempts(&mut self, what: &str, refusal_answers: bool, mut f: impl FnMut(&mut S) -> Result<(), ScsiError>)
+                -> Result<(), ScsiError> {
         const RETRIES: u32 = 4;
         let mut attempt = 1;
         loop {
             match f(&mut self.dev) {
                 Ok(()) => return Ok(()),
-                Err(ScsiError::Failed(e)) if attempt < RETRIES => {
+                Err(ScsiError::Refused(e)) if refusal_answers => return Err(ScsiError::Refused(e)),
+                Err(ScsiError::Failed(e) | ScsiError::Refused(e)) if attempt < RETRIES => {
                     self.retried += 1;
                     self.last_retry = format!("{what}: {e}");
                     std::thread::sleep(std::time::Duration::from_millis(250 * attempt as u64));
                     attempt += 1;
                 }
-                Err(ScsiError::Failed(e)) => {
+                Err(ScsiError::Failed(e) | ScsiError::Refused(e)) => {
                     return Err(ScsiError::Failed(format!("{what}: {e} (tried {RETRIES} times)")));
                 }
                 Err(e) => return Err(e),
@@ -328,15 +343,27 @@ impl<S: Scsi> Connection<S> {
     /// A command without data; returns the whole 16-byte answer, whose first
     /// two bytes echo the command.
     fn call16(&mut self, cmd: u16, args: &[u8]) -> Result<[u8; 16], ScsiError> {
+        self.call16_probing(cmd, args, false)
+    }
+
+    /// A loader command the unit may not know (the ROM alone refuses them): a
+    /// refusal is the answer, not sent again; a failed transfer is.
+    fn probe(&mut self, cmd: u16) -> Result<[u8; 14], ScsiError> {
+        Ok(self.call16_probing(cmd, &[], true)?[2..].try_into().unwrap())
+    }
+
+    fn call16_probing(&mut self, cmd: u16, args: &[u8], probe: bool) -> Result<[u8; 16], ScsiError> {
         let mut resp = [0u8; 16];
         let c = cdb(cmd, args);
         let what = match cmd {
             ERASE_BLOCK | ERASE_SECTOR => format!("erasing 0x{:05X}", u32::from_be_bytes([args[0], args[1], args[2], args[3]])),
             _ => format!("command 0x{cmd:04x}"),
         };
-        self.retry(&what, |d| d.execute(&c, Data::In(&mut resp)).map(|_| ()))?;
+        self.attempts(&what, probe, |d| d.execute(&c, Data::In(&mut resp)).map(|_| ()))?;
         if u16::from_be_bytes([resp[0], resp[1]]) != cmd {
-            return Err(ScsiError::Failed(format!("unexpected answer to command 0x{cmd:04x}")));
+            let text = format!("unexpected answer to command 0x{cmd:04x}");
+            // no echo: a command the unit does not know, for a probe
+            return Err(if probe { ScsiError::Refused(text) } else { ScsiError::Failed(text) });
         }
         Ok(resp)
     }

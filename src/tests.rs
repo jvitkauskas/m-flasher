@@ -889,6 +889,12 @@ pub struct MockRom {
     pub lose_jump: bool,
     /// This many FB06 commands fail.
     pub fail_uploads: usize,
+    /// This many FC40 commands fail (a transfer error).
+    pub fail_identify: usize,
+    /// This many FC0A commands fail (a transfer error).
+    pub fail_online: usize,
+    /// Commands the ROM doesn't know are answered without an echo, not refused.
+    pub no_echo: bool,
 }
 
 /// The version in the bundled loader.
@@ -936,9 +942,21 @@ impl Scsi for MockRom {
                     return Ok(b.len() - self.short_reads as usize);
                 }
                 b.fill(0);
+                if op == 0xFC40 && self.fail_identify > 0 {
+                    self.fail_identify -= 1;
+                    return Err(ScsiError::Failed("transfer failed".into()));
+                }
+                if op == 0xFC0A && self.fail_online > 0 {
+                    self.fail_online -= 1;
+                    return Err(ScsiError::Failed("transfer failed".into()));
+                }
                 if self.real_loader {
                     if self.loader.is_none() && op != 0xFB08 {
-                        return Ok(b.len()); // no echo: the ROM does not know the command
+                        if self.no_echo {
+                            return Ok(b.len());
+                        }
+                        // the ROM does not know the command, and says so
+                        return Err(ScsiError::Refused(format!("command 0x{op:04x} failed (status 1)")));
                     }
                     match op {
                         0xFB08 => {
@@ -1294,4 +1312,23 @@ fn asks_for_the_sg_driver_only_when_a_unit_needs_it() {
     std::fs::create_dir(&class).unwrap();
     assert!(!sg_missing_for_unit(&class, &usb), "driver loaded");
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_unit_without_a_loader_is_not_asked_again() {
+    // the ROM refuses the loader's commands: an answer, not a USB problem
+    let (_, c) = start(MockRom::default());
+    let c = c.unwrap();
+    assert_eq!(c.retries(), (0, String::new()));
+    // a transfer that fails while asking is still sent again
+    let (_, c) = start(MockRom { fail_identify: 1, ..Default::default() });
+    let (n, last) = c.unwrap().retries();
+    assert_eq!(n, 1);
+    assert!(last.starts_with("command 0xfc40: transfer failed"), "{last}");
+    // a ROM that answers what it doesn't know without an echo: no loader either
+    let (_, c) = start(MockRom { no_echo: true, ..Default::default() });
+    assert_eq!(c.unwrap().retries().0, 0);
+    // asking for another tool's loader fails every time: not taken for "none"
+    let (_, c) = start(MockRom { fail_online: 4, ..Default::default() });
+    assert!(matches!(c, Err(ScsiError::Failed(e)) if e.contains("0xfc0a")));
 }
