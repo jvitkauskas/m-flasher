@@ -166,16 +166,19 @@ impl Device {
             Data::In(b) if b.is_empty() => Ok(0),
             Data::Out(b) if b.is_empty() => Ok(0),
             Data::In(buf) => {
+                // 13 bytes in place of more asked for may be a status block; 13
+                // asked for are data, whatever they hold
+                let status = |b: &[u8]| if b.len() > 13 { csw_tag(b) } else { None };
                 let mut skipped = 0;
                 loop {
                     match self.handle.read_bulk(self.ep_in, buf, TIMEOUT) {
                         // this command's status: the device sent no data
-                        Ok(13) if csw_tag(buf) == Some(self.tag) => {
+                        Ok(13) if status(buf) == Some(self.tag) => {
                             early = Some(buf[..13].try_into().unwrap());
                             break Ok(0);
                         }
                         // an earlier command's status, left over: the data follows
-                        Ok(13) if skipped < 2 && csw_tag(buf).is_some() => skipped += 1,
+                        Ok(13) if skipped < 2 && status(buf).is_some() => skipped += 1,
                         Ok(n) => break Ok(n),
                         Err(rusb::Error::Pipe) => break Err(self.ep_in),
                         Err(e) => return Err(failed(&format!("command {name}: reading its data"), e)),
