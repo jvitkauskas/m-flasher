@@ -61,6 +61,22 @@ left after a year's signing goes to the next.
 [Sponsor on GitHub](https://github.com/sponsors/jvitkauskas) ·
 [Donate on Ko-fi](https://ko-fi.com/jvitkauskas)
 
+## Code signing policy
+
+Free code signing for Windows provided by [SignPath.io](https://about.signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/).
+
+- The signed program is built from this repository by its
+  [GitHub Actions workflow](.github/workflows/build.yml), and nothing else is
+  signed.
+- Committers, reviewers and approvers:
+  [Julius Vitkauskas](https://github.com/jvitkauskas). Changes from anyone
+  else are reviewed before they are merged, and every release is approved for
+  signing by hand.
+- Privacy: this program will not transfer any information to other networked
+  systems unless specifically requested by the user or the person installing
+  or operating it. It has no network code: it talks to the unit over USB.
+
 ## Credits and license
 
 MIT ([LICENSE](LICENSE)). Bundled files and their licenses:
