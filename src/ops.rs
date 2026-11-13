@@ -50,8 +50,8 @@ fn refuse<T>(s: impl Into<String>) -> Result<T, Error> {
 fn bootable_package_boot_area(pkg: &Package) -> Result<(), Error> {
     check_boot_area(&pkg.flash).map_err(|e| Error::Refused(format!(
         "the boot area of {} can't start the unit: {}. Custom firmware packages often carry only a stand-in \
-         there, which their own installers never write. Install the firmware without the bootloader, and put back \
-         the stock bootloader from an official M-VAVE package", pkg.identity, e.0)))
+         there, which their own installers never write. Its firmware installs without it (FLASH FIRMWARE keeps \
+         the unit's bootloader); for the stock bootloader, use an official M-VAVE package", pkg.identity, e.0)))
 }
 
 pub fn bundled_bootloader(board: &Board) -> Result<(&'static [u8], String), Error> {
@@ -357,7 +357,7 @@ impl<F: Flash> Session<F> {
         Plan::new("Restore a backup".into(), &self.flash, target, allowed, notes, warnings)
     }
 
-    pub fn plan_firmware(&self, raw: &[u8], with_bootloader: bool) -> Result<Plan, Error> {
+    pub fn plan_firmware(&self, raw: &[u8]) -> Result<Plan, Error> {
         let pkg = Package::parse(raw).map_err(|e| Error::Refused(e.0))?;
         let board = self.need_board()?;
         if !board.models.contains(&pkg.model()) {
@@ -394,18 +394,12 @@ impl<F: Flash> Session<F> {
                                    firmware cleanly, restore a backup made while it was installed.",
                                   self.analysis.firmware_text, pkg.identity));
         }
-        if with_bootloader {
-            bootable_package_boot_area(&pkg)?;
-        }
-        let start = if with_bootloader { 0 } else { BOOT_AREA };
-        let end = pkg.flash.len();
+        // the unit's boot area is kept: a bootloader is changed only from the bootloader action
+        let (start, end) = (BOOT_AREA, pkg.flash.len());
         let mut target = self.flash.clone();
         target[start..end].copy_from_slice(&pkg.flash[start..end]);
         let allowed = vec![(start, end)];
         notes.push(format!("Installs {} ({}).", pkg.identity, ranges_text(&allowed)));
-        if with_bootloader {
-            notes.push("Also puts back the package's stock bootloader: its whole boot area.".into());
-        }
         Plan::new(format!("Install firmware {}", pkg.identity), &self.flash, target, allowed, notes, warnings)
     }
 
@@ -451,10 +445,12 @@ impl<F: Flash> Session<F> {
         let (area, note) = match stock_area {
             Some(area) => (area, "Only the boot area (0x00000-0x03FFF) is written, all of it from the package."),
             None if full => (build_boot_area(&self.flash, &boot)
-                .map_err(|e| Error::Refused(format!("{}; install firmware with its bootloader instead", e.0)))?,
+                .map_err(|e| Error::Refused(format!("{}; put back the stock bootloader from an official package instead (STOCK (FROM .FWSC), or \
+                                                  `bootloader --stock PACKAGE.fwsc`)", e.0)))?,
                 "Only the boot area (0x00000-0x03FFF) is written; the unit's own configuration in it is kept."),
             None => (build_short_boot_area(&self.flash, &boot)
-                .map_err(|e| Error::Refused(format!("{}; install firmware with its bootloader instead", e.0)))?,
+                .map_err(|e| Error::Refused(format!("{}; put back the stock bootloader from an official package instead (STOCK (FROM .FWSC), or \
+                                                  `bootloader --stock PACKAGE.fwsc`)", e.0)))?,
                 "Only the boot area (0x00000-0x03FFF) is written. This bootloader does not read the unit's configuration, \
                  so of that only the chip key is kept, with the settings older versions need."),
         };

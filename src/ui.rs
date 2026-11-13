@@ -396,9 +396,7 @@ impl eframe::App for App {
                 if file_row(&p, "FIRMWARE FILE", st.file(FileKind::Firmware), "CHOOSE FILE", "choosefw") {
                     self.ctl.choose_file(FileKind::Firmware);
                 }
-                if checkbox(ui, &p, 56.0, 743.0, "Also put back the stock bootloader (official packages)", st.with_boot, active) {
-                    self.ctl.set_with_boot(!st.with_boot);
-                }
+                p.text(56.0, 743.0, Align2::LEFT_CENTER, "The unit's bootloader is kept. To change it, use FLASH BOOTLOADER.", "plex", 14.0, DIM, 0.0);
                 p.text(56.0, 772.0, Align2::LEFT_CENTER, &auto_line, "tech", 13.5, LAV, 2.0);
             }
             (_, Mode::Bootloader) => {
