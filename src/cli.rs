@@ -154,7 +154,7 @@ fn restart(path: &str) -> Result<(), Error> {
     Ok(())
 }
 
-const SG_DRIVER: &str = "a unit is in download mode, but the SCSI generic driver is not loaded: run `sudo modprobe sg`, then try again";
+use crate::scsi::SG_DRIVER;
 
 /// The unit to use: --device, or the one unit in download mode.
 fn pick_device(device: Option<String>) -> Result<String, Error> {
