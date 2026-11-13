@@ -137,7 +137,6 @@ pub struct Shared {
     // the user's choices
     pub mode: Mode,
     pub files: HashMap<&'static str, PathBuf>,
-    pub with_boot: bool,
     /// Restore: the unit keeps its own bootloader.
     pub keep_boot: bool,
     pub boot_source: BootSource,
@@ -220,7 +219,6 @@ impl Controller {
                 open_version: open_version.clone(),
                 mode: Mode::Firmware,
                 files: HashMap::new(),
-                with_boot: false,
                 keep_boot: false,
                 boot_source: BootSource::Open,
                 midi: None,
@@ -491,11 +489,11 @@ impl Controller {
     // ---- planning ----
 
     fn replan_now(&self) {
-        let (mode, files, with_boot, keep_boot, src) = {
+        let (mode, files, keep_boot, src) = {
             let s = self.shared.lock().unwrap();
             // (choices change under this lock)
             self.planned.store(self.choices.load(Ordering::SeqCst), Ordering::SeqCst);
-            (s.mode, s.files.clone(), s.with_boot, s.keep_boot, s.boot_source)
+            (s.mode, s.files.clone(), s.keep_boot, s.boot_source)
         };
         let guard = self.unit.lock().unwrap();
         let Some(unit) = guard.as_ref() else { return };
@@ -535,7 +533,7 @@ impl Controller {
             },
             Mode::Firmware => match read("firmware") {
                 None => return need(self, "Choose a firmware package (.fwsc)"),
-                Some(d) => d.and_then(|d| unit.plan_firmware(&d, with_boot)),
+                Some(d) => d.and_then(|d| unit.plan_firmware(&d)),
             },
             Mode::Bootloader => match src {
                 BootSource::Open => unit.plan_bootloader(None, None),
@@ -623,11 +621,6 @@ impl Controller {
             self.replan();
         }
         taken
-    }
-
-    pub fn set_with_boot(&self, v: bool) {
-        self.choose(|s| s.with_boot = v);
-        self.replan();
     }
 
     pub fn set_keep_boot(&self, v: bool) {

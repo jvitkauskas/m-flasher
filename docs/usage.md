@@ -95,7 +95,7 @@ stock firmware takes about half a minute).
 | --- | --- |
 | **Back up the whole flash** | nothing: saves the 1 MiB flash image and a `.json` describing it |
 | **Restore a backup** | the parts that differ; a backup of another unit keeps this unit's own factory data (calibration, Bluetooth address). With **Keep this unit's bootloader**, not the boot area (16 KiB): an older backup then leaves a newer m-bootloader in place |
-| **Install firmware (.fwsc)** | the firmware from an M-VAVE package (or a custom one in the same format); optionally, from an official package, its stock bootloader. Nothing outside the package is erased |
+| **Install firmware (.fwsc)** | the firmware from an M-VAVE package (or a custom one in the same format); the unit's boot area is kept. Nothing outside the package is erased |
 | **Install m-bootloader** | the boot area only (16 KiB), the build for the identified model; of the unit's boot configuration, which it does not read, only the chip key that firmware installers need is kept |
 | **Put back the stock bootloader** | the boot area only, all of it from an official package, the full configuration included |
 
@@ -140,7 +140,7 @@ start normally, including 1.2 from Melodee's or fm1-base's installer option. m-b
 M-UPGRADE on an SMK-37 running Felucca-family firmware, stop there because the
 unit's boot area differs from the package's, as it does with any m-bootloader.
 The boot area and firmware stay as they were. Restore a backup with M-Flasher
-instead, or install the firmware and put back the stock bootloader.
+instead, or install the firmware and then put back the stock bootloader.
 
 Backups go to `Documents/M-Flasher/backups` in your home folder; the
 **Backups** link at the top of the window opens it.
@@ -164,7 +164,7 @@ m-flasher restart              # leave download mode: the unit resets and starts
 m-flasher info                 # what is on the unit
 m-flasher backup [DIR]
 m-flasher restore BACKUP.bin
-m-flasher firmware PACKAGE.fwsc [--with-bootloader]
+m-flasher firmware PACKAGE.fwsc
 m-flasher bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot]
 m-flasher run-ram IMAGE --addr 0x01C28000 [--call FC60]... [--read ADDR:LEN -o OUT]
 ```

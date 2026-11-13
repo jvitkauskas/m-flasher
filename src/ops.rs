@@ -357,7 +357,7 @@ impl<F: Flash> Session<F> {
         Plan::new("Restore a backup".into(), &self.flash, target, allowed, notes, warnings)
     }
 
-    pub fn plan_firmware(&self, raw: &[u8], with_bootloader: bool) -> Result<Plan, Error> {
+    pub fn plan_firmware(&self, raw: &[u8]) -> Result<Plan, Error> {
         let pkg = Package::parse(raw).map_err(|e| Error::Refused(e.0))?;
         let board = self.need_board()?;
         if !board.models.contains(&pkg.model()) {
@@ -394,18 +394,12 @@ impl<F: Flash> Session<F> {
                                    firmware cleanly, restore a backup made while it was installed.",
                                   self.analysis.firmware_text, pkg.identity));
         }
-        if with_bootloader {
-            bootable_package_boot_area(&pkg)?;
-        }
-        let start = if with_bootloader { 0 } else { BOOT_AREA };
-        let end = pkg.flash.len();
+        // the unit's boot area is kept: a bootloader is changed only from the bootloader action
+        let (start, end) = (BOOT_AREA, pkg.flash.len());
         let mut target = self.flash.clone();
         target[start..end].copy_from_slice(&pkg.flash[start..end]);
         let allowed = vec![(start, end)];
         notes.push(format!("Installs {} ({}).", pkg.identity, ranges_text(&allowed)));
-        if with_bootloader {
-            notes.push("Also puts back the package's stock bootloader: its whole boot area.".into());
-        }
         Plan::new(format!("Install firmware {}", pkg.identity), &self.flash, target, allowed, notes, warnings)
     }
 
