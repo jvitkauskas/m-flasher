@@ -50,8 +50,8 @@ fn refuse<T>(s: impl Into<String>) -> Result<T, Error> {
 fn bootable_package_boot_area(pkg: &Package) -> Result<(), Error> {
     check_boot_area(&pkg.flash).map_err(|e| Error::Refused(format!(
         "the boot area of {} can't start the unit: {}. Custom firmware packages often carry only a stand-in \
-         there, which their own installers never write. Install the firmware without the bootloader, and put back \
-         the stock bootloader from an official M-VAVE package", pkg.identity, e.0)))
+         there, which their own installers never write. Its firmware installs without it (FLASH FIRMWARE keeps \
+         the unit's bootloader); for the stock bootloader, use an official M-VAVE package", pkg.identity, e.0)))
 }
 
 pub fn bundled_bootloader(board: &Board) -> Result<(&'static [u8], String), Error> {
@@ -445,10 +445,12 @@ impl<F: Flash> Session<F> {
         let (area, note) = match stock_area {
             Some(area) => (area, "Only the boot area (0x00000-0x03FFF) is written, all of it from the package."),
             None if full => (build_boot_area(&self.flash, &boot)
-                .map_err(|e| Error::Refused(format!("{}; install firmware with its bootloader instead", e.0)))?,
+                .map_err(|e| Error::Refused(format!("{}; put back the stock bootloader from an official package instead (STOCK (FROM .FWSC), or \
+                                                  `bootloader --stock PACKAGE.fwsc`)", e.0)))?,
                 "Only the boot area (0x00000-0x03FFF) is written; the unit's own configuration in it is kept."),
             None => (build_short_boot_area(&self.flash, &boot)
-                .map_err(|e| Error::Refused(format!("{}; install firmware with its bootloader instead", e.0)))?,
+                .map_err(|e| Error::Refused(format!("{}; put back the stock bootloader from an official package instead (STOCK (FROM .FWSC), or \
+                                                  `bootloader --stock PACKAGE.fwsc`)", e.0)))?,
                 "Only the boot area (0x00000-0x03FFF) is written. This bootloader does not read the unit's configuration, \
                  so of that only the chip key is kept, with the settings older versions need."),
         };
