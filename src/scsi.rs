@@ -252,6 +252,8 @@ mod imp {
     /// The unit, opened by this process: an administrator's.
     pub struct Disk {
         h: HANDLE,
+        /// Windows' error for the last command that failed in the system call.
+        last_error: u32,
     }
 
     // SAFETY: the handle is only used by one thread at a time (behind &mut self).
@@ -259,7 +261,16 @@ mod imp {
 
     impl Disk {
         pub fn open(path: &str) -> Result<Disk, ScsiError> {
-            Ok(Disk { h: open_raw(path, GENERIC_READ | GENERIC_WRITE)? })
+            Ok(Disk { h: open_raw(path, GENERIC_READ | GENERIC_WRITE)?, last_error: 0 })
+        }
+
+        /// Whether Windows refuses this process the unit's commands. Opening
+        /// the disk for reading and writing doesn't need administrator rights
+        /// on every PC (some let any user open removable disks), but sending it
+        /// commands does: INQUIRY, the first command sent anyway, tells.
+        fn commands_denied(&mut self) -> bool {
+            let mut buf = [0u8; 36];
+            self.execute(&[0x12, 0, 0, 0, 36, 0], Data::In(&mut buf)).is_err() && self.last_error == ERROR_ACCESS_DENIED
         }
     }
 
@@ -301,6 +312,15 @@ mod imp {
             if ok == 0 {
                 // SAFETY: plain FFI call.
                 let e = unsafe { GetLastError() };
+                self.last_error = e;
+                if e == ERROR_ACCESS_DENIED {
+                    // only with administrator rights: without, the helper is used (Device::open)
+                    return Err(ScsiError::Failed(format!(
+                        "command {} refused by Windows (access denied, error 5) although M-Flasher has administrator \
+                         rights: security software or a policy that blocks removable drives can do that",
+                        cmd_name(cdb)
+                    )));
+                }
                 return Err(ScsiError::Failed(format!("command {} failed: error {e}", cmd_name(cdb))));
             }
             if s.sptd.scsi_status != 0 {
@@ -324,7 +344,16 @@ mod imp {
         pub fn open(path: &str) -> Result<Device, ScsiError> {
             let r = match Disk::open(path) {
                 Err(ScsiError::NeedsAdmin(_)) => super::helper::open(path).map(|_| Device::Helper),
-                r => r.map(Device::Direct),
+                Ok(mut d) => {
+                    if d.commands_denied() {
+                        // opened, but its commands need the rights all the same
+                        drop(d);
+                        super::helper::open(path).map(|_| Device::Helper)
+                    } else {
+                        Ok(Device::Direct(d))
+                    }
+                }
+                Err(e) => Err(e),
             };
             r.map_err(|e| match e {
                 ScsiError::Failed(m) => ScsiError::Failed(format!("{m}: reconnect the unit to try again")),
