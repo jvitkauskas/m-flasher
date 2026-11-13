@@ -509,6 +509,10 @@ mod imp {
 
 pub use imp::{Device, find_devices};
 
+/// What to do when `needs_sg_driver`, for the window and the command line.
+pub const SG_DRIVER: &str = "a unit is in download mode, but Linux's SCSI generic driver, which M-Flasher reaches it \
+                             through, is not loaded: run `sudo modprobe sg`, then try again";
+
 /// Linux: a unit is in download mode on USB, but the SCSI generic driver that
 /// M-Flasher finds it through isn't loaded.
 #[cfg(all(target_os = "linux", not(feature = "usb")))]

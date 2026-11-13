@@ -12,7 +12,7 @@ use crate::scsi::{Device, ScsiError, find_devices};
 use crate::sectormap::{Region, sector_map};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -178,6 +178,9 @@ pub struct Controller {
     suggested: Arc<Mutex<Vec<String>>>,
     /// The unit that last failed to connect, and how many times in a row.
     failures: Arc<Mutex<(String, u32)>>,
+    /// Linux: a unit is in download mode but the SCSI generic driver isn't
+    /// loaded, and the window has said so (once, until it changes).
+    sg_missing: Arc<AtomicBool>,
     /// Counts the user's choices (mode, files, options, model), and the count
     /// the plan was made from: a plan from older choices is never written.
     choices: Arc<AtomicU64>,
@@ -231,6 +234,7 @@ impl Controller {
             declined: Arc::new(Mutex::new(None)),
             suggested: Arc::new(Mutex::new(vec![])),
             failures: Arc::new(Mutex::new((String::new(), 0))),
+            sg_missing: Arc::new(AtomicBool::new(false)),
             choices: Arc::new(AtomicU64::new(0)),
             planned: Arc::new(AtomicU64::new(0)),
             picking: Arc::new(AtomicU64::new(0)),
@@ -338,6 +342,7 @@ impl Controller {
                     None if devs.len() == 1 && declined.as_ref() != Some(&devs[0].0) => self.connect(devs[0].0.clone()),
                     _ => {}
                 }
+                self.check_sg_driver(connected.is_none() && devs.is_empty());
                 let multiple = connected.is_none() && devs.len() > 1;
                 if self.shared.lock().unwrap().multiple != multiple {
                     self.with(|s| s.multiple = multiple);
@@ -351,6 +356,27 @@ impl Controller {
                 }
             }
             std::thread::sleep(Duration::from_millis(1500));
+        }
+    }
+
+    /// Linux: says once, while it lasts, that a unit is in download mode but
+    /// can't be seen for want of the SCSI generic driver; the command line
+    /// says it too.
+    fn check_sg_driver(&self, none_found: bool) {
+        let missing = none_found && crate::scsi::needs_sg_driver();
+        if self.sg_missing.swap(missing, Ordering::SeqCst) == missing {
+            return;
+        }
+        let text = format!("Refused: {}", crate::scsi::SG_DRIVER);
+        if missing {
+            self.log(text.clone());
+            self.with(|s| s.alert = Some((AlertKind::Refused, text)));
+        } else {
+            self.with(|s| {
+                if s.alert.as_ref().is_some_and(|(_, t)| *t == text) {
+                    s.alert = None;
+                }
+            });
         }
     }
 
@@ -372,6 +398,11 @@ impl Controller {
                 std::thread::sleep(Duration::from_millis(500));
                 if !find_devices().is_empty() {
                     return Ok(());
+                }
+                // back, but not to be seen without the driver
+                if crate::scsi::needs_sg_driver() {
+                    c.sg_missing.store(true, Ordering::SeqCst);
+                    return Err(Error::Refused(crate::scsi::SG_DRIVER.into()));
                 }
             }
             Err(Error::Refused(format!(

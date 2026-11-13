@@ -56,7 +56,10 @@ On other distributions, use `m-flasher-…-linux-x86_64.tar.gz` (or
 `-aarch64`; `uname -m` tells which) and follow its `README.txt`: install the
 udev rule once, connect the unit, and run `./m-flasher`. M-Flasher talks to
 the unit through the SCSI generic driver: run `sudo modprobe sg` if there is
-no `/dev/sg*`. `m-flasher.png` is the icon, for a launcher of your own.
+no `/dev/sg*`, and `echo sg | sudo tee /etc/modules-load.d/m-flasher.conf` to
+load it at every start (the packages do this themselves). M-Flasher says so when
+a unit is in download mode without it. `m-flasher.png` is the icon, for a
+launcher of your own.
 
 ## Download mode
 
