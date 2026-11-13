@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="64" viewBox="0 0 320 64" role="img" aria-label="Download M-Flasher">
+  <title>Download M-Flasher</title>
+  <rect width="320" height="64" rx="12" fill="#7fe0b5"/>
+  <path transform="translate(20 15) scale(1.45)" fill="#0d1712" d="M11 3h2v9.6l3.3-3.3 1.4 1.4L12 16.4l-5.7-5.7 1.4-1.4 3.3 3.3V3zM5 18h14v2H5z"/>
+  <text x="66" y="40.5" fill="#0d1712" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" font-weight="700"
+        textLength="230" lengthAdjust="spacingAndGlyphs">Download M-Flasher</text>
+</svg>

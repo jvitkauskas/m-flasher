@@ -1,5 +1,12 @@
 # M-Flasher
 
+<p>
+  <a href="https://jvitkauskas.github.io/m-apps/flasher/"><img src="docs/download-button.svg" alt="Download M-Flasher" width="320" height="64"></a>
+</p>
+
+**Free for Windows, macOS and Linux.** New to it? Read the
+[step-by-step guide](https://jvitkauskas.github.io/m-apps/flasher/guide/).
+
 Back up, restore and reinstall the firmware of an **M-VAVE FM-1** (or its
 rebranded twin, the **Fame MiniFM**) or **SMK-37 Pro / Elite** over USB, and
 install
@@ -25,7 +32,9 @@ the unit is broken. For Windows, macOS and Linux.
 
 ## Getting started
 
-1. Download the package for your system from the [releases](../../releases)
+1. Download M-Flasher from the
+   [download page](https://jvitkauskas.github.io/m-apps/flasher/), which picks
+   the file for your system (all files are in the [releases](../../releases)),
    and follow its short instructions. The apps are not signed, so the first
    start needs one extra confirmation ([why](#support)).
 2. Put the unit in **download mode** and connect it with a USB data cable:
