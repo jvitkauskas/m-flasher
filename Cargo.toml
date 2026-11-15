@@ -7,12 +7,16 @@ license = "MIT"
 build = "build.rs"
 
 [dependencies]
-eframe = { version = "0.36", default-features = false, features = ["glow", "wayland", "x11", "default_fonts"] }
 rfd = "0.17"
 sha2 = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 skrifa = "0.44"
 lyon_tessellation = "1"
+
+# Linux, macOS: OpenGL (Linux falls back to Mesa's software renderer without a
+# GPU driver)
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["glow", "wayland", "x11", "default_fonts"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
@@ -28,6 +32,11 @@ midir = "0.11"
 usb = ["dep:rusb"]
 
 [target.'cfg(windows)'.dependencies]
+# Direct3D 12 through wgpu, not OpenGL: Windows OpenGL drivers and overlays can
+# leave the window blank (#57). DX12 only; Windows draws it in software (WARP)
+# where the graphics driver has no DX12.
+eframe = { version = "0.36", default-features = false, features = ["wgpu_no_default_features", "default_fonts"] }
+wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl", "std", "parking_lot"] }
 midir = "0.11"
 windows-sys = { version = "0.61", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_Storage_IscsiDisc", "Win32_System_Com", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
