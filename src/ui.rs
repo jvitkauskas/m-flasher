@@ -827,9 +827,27 @@ pub fn run() -> eframe::Result {
             .with_min_inner_size(vec2(900.0, 600.0))
             // ours (macos/icon.svg), not egui's: the Dock and taskbars show it
             .with_icon(eframe::icon_data::from_png_bytes(ICON).unwrap_or_default()),
+        #[cfg(windows)]
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
     eframe::run_native("M-Flasher", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
+}
+
+/// Windows: Direct3D 12 (the only backend built in); on a laptop with two
+/// GPUs, the integrated one, which drives the display (a panel needs no more);
+/// and Windows' own shader compiler, so that no dxcompiler.dll is looked for.
+/// The WGPU_* environment variables still override each.
+#[cfg(windows)]
+fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew};
+    use eframe::wgpu;
+    let mut setup = WgpuSetupCreateNew::without_display_handle();
+    setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12);
+    setup.instance_descriptor.backend_options.dx12.shader_compiler =
+        wgpu::Dx12Compiler::from_env().unwrap_or(wgpu::Dx12Compiler::Fxc);
+    setup.power_preference = wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::LowPower);
+    WgpuConfiguration { wgpu_setup: WgpuSetup::CreateNew(setup), ..Default::default() }
 }
 
 // ---- drawing helpers (board coordinates, text, keys, icons) ----
