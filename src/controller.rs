@@ -107,6 +107,28 @@ pub struct DeviceView {
     pub evidence: Vec<String>,
 }
 
+/// A firmware of the library, as the Library tab lists it.
+#[derive(Clone, Debug)]
+pub struct LibItem {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// Author and licence.
+    pub byline: String,
+    pub kinds: String,
+    /// "old": the FM-1's older flash chip only; "new"; "any".
+    pub chip: String,
+    pub beta: bool,
+    /// On this computer and checked.
+    pub saved: bool,
+    /// Installed with its author's own installer, not from a package.
+    pub elsewhere: bool,
+    /// Versions of it on this computer older than the list's: UPDATE.
+    pub older: Vec<String>,
+    /// Starred.
+    pub favorite: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct BackupInfo {
     pub path: PathBuf,
@@ -146,6 +168,25 @@ pub struct Shared {
     /// Recommend m-bootloader to the user (the unit has the stock bootloader):
     /// the key that opens its recovery menu.
     pub suggest_boot: Option<&'static str>,
+    /// The Library tab: the firmwares, what the list's state is, and whether it is being read.
+    pub library: Vec<LibItem>,
+    pub library_note: String,
+    pub library_loading: bool,
+    /// Library: the firmwares being downloaded (GET), by id.
+    pub library_getting: Vec<String>,
+    /// Installing firmware on a unit with M-VAVE's stock bootloader: m-bootloader
+    /// goes first (REQ-BOOT-01), the key that opens its recovery menu.
+    pub boot_first: Option<&'static str>,
+    /// Step 1 (m-bootloader) is being installed: the firmware is step 2.
+    pub firmware_after: bool,
+    /// Step 1 is written: the window opens the firmware's review.
+    pub review_next: bool,
+    /// Library INSTALL with no unit in download mode: the firmware (id) to plan once one is.
+    pub install_after: Option<String>,
+    /// How to put the unit in download mode by hand, shown while INSTALL waits for it.
+    pub how_to: Option<String>,
+    /// Library INSTALL planned: the window opens its review (or the two steps).
+    pub library_review: bool,
 }
 
 fn file_key(k: FileKind) -> &'static str {
@@ -198,35 +239,85 @@ fn now() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
+impl Shared {
+    pub(crate) fn new(open_version: String, backup_dir: PathBuf) -> Shared {
+        Shared {
+            phase: Phase::Waiting,
+            busy: false,
+            multiple: false,
+            device: None,
+            map: vec![Region::Free; 256],
+            marks: HashMap::new(),
+            stage: [Stage::Idle; 4],
+            pct: 0.0,
+            cur: None,
+            plan: None,
+            alert: None,
+            log: vec![],
+            backups: vec![],
+            backup_dir,
+            backup_saved: None,
+            open_version,
+            mode: Mode::Firmware,
+            files: HashMap::new(),
+            keep_boot: false,
+            boot_source: BootSource::Open,
+            midi: None,
+            suggest_boot: None,
+            library: vec![],
+            library_note: String::new(),
+            library_loading: false,
+            library_getting: vec![],
+            boot_first: None,
+            firmware_after: false,
+            review_next: false,
+            install_after: None,
+            how_to: None,
+            library_review: false,
+        }
+    }
+
+    /// Two steps (REQ-BOOT-01), step 1 chosen: m-bootloader, the firmware kept for step 2.
+    pub(crate) fn begin_two_step(&mut self) -> bool {
+        let ok = !self.busy && self.mode == Mode::Firmware;
+        if ok {
+            self.firmware_after = true;
+            self.mode = Mode::Bootloader;
+            self.boot_source = BootSource::Open;
+        }
+        ok
+    }
+
+    /// The two steps given up before step 1 was written: back to the firmware.
+    pub(crate) fn drop_two_step(&mut self) -> bool {
+        let was = std::mem::take(&mut self.firmware_after);
+        if was && !self.busy {
+            self.mode = Mode::Firmware;
+        }
+        was
+    }
+
+    /// Step 1 written and verified: the firmware, still chosen, is step 2,
+    /// its review opened by the window. Whether this was step 1 of two.
+    pub(crate) fn end_step_one(&mut self, total: usize) -> bool {
+        if !(std::mem::take(&mut self.firmware_after) && self.mode == Mode::Bootloader) {
+            return false;
+        }
+        self.mode = Mode::Firmware;
+        self.phase = Phase::Ready;
+        self.review_next = true;
+        self.alert = Some((AlertKind::Done, format!("Step 1 of 2 done: m-bootloader {} written and verified \
+            ({total} sectors). Step 2: the firmware's review opens next.", self.open_version)));
+        true
+    }
+}
+
 impl Controller {
     pub fn new(ctx: egui::Context) -> Controller {
         let open_version = bundled_bootloader(BOARDS[1]).map(|(_, v)| v).unwrap_or_else(|_| "?".into());
         let backup_dir = default_backup_dir();
         let c = Controller {
-            shared: Arc::new(Mutex::new(Shared {
-                phase: Phase::Waiting,
-                busy: false,
-                multiple: false,
-                device: None,
-                map: vec![Region::Free; 256],
-                marks: HashMap::new(),
-                stage: [Stage::Idle; 4],
-                pct: 0.0,
-                cur: None,
-                plan: None,
-                alert: None,
-                log: vec![],
-                backups: vec![],
-                backup_dir,
-                backup_saved: None,
-                open_version: open_version.clone(),
-                mode: Mode::Firmware,
-                files: HashMap::new(),
-                keep_boot: false,
-                boot_source: BootSource::Open,
-                midi: None,
-                suggest_boot: None,
-            })),
+            shared: Arc::new(Mutex::new(Shared::new(open_version.clone(), backup_dir))),
             unit: Arc::new(Mutex::new(None)),
             plan: Arc::new(Mutex::new(None)),
             declined: Arc::new(Mutex::new(None)),
@@ -411,6 +502,56 @@ impl Controller {
         });
     }
 
+    /// After a write: the unit leaves download mode by the restart (the
+    /// command line's `--restart`; the firmware is not running yet, so MIDI
+    /// can't do it) and starts what was written. Waits up to 60 s for it on
+    /// USB MIDI and says whether it started.
+    fn restart_unit(&self, total: usize) {
+        let written = format!("{total} sectors written, read back and verified.");
+        let sent = {
+            let mut g = self.unit.lock().unwrap();
+            g.as_mut().map(|u| (u.dev.path().to_string(), u.dev.restart()))
+        };
+        let path = match sent {
+            Some((path, Ok(_))) => path,
+            Some((_, Err(e))) => {
+                self.log(format!("Could not restart the unit ({e}): switch it off and on"));
+                return;
+            }
+            None => return,
+        };
+        self.log("Restarting the unit: it leaves download mode and starts what was written".into());
+        self.drop_unit();
+        let say = |kind: AlertKind, text: String| self.with(|s| s.alert = Some((kind, text)));
+        say(AlertKind::Done, format!("{written} Restarting the unit…"));
+        let gone = (0..20).any(|_| {
+            std::thread::sleep(Duration::from_millis(250));
+            !find_devices().iter().any(|(p, _)| *p == path)
+        });
+        if !gone {
+            self.log("The unit did not leave download mode".into());
+            say(AlertKind::Done, format!("{written} The unit did not restart: switch it off and on to start it."));
+            return;
+        }
+        for _ in 0..120 {
+            std::thread::sleep(Duration::from_millis(500));
+            if let Some(u) = crate::midi::find_units().into_iter().next() {
+                self.log(format!("Running: the {} is on USB MIDI", u.name));
+                say(AlertKind::Done, format!("{written} The unit restarted and is running ({} on USB MIDI).", u.name));
+                return;
+            }
+            if !find_devices().is_empty() {
+                self.log("The unit came back in download mode: what was written did not start".into());
+                say(AlertKind::Error, format!("{written} But the unit came back in download mode: what was written \
+                    did not start. Its backup is saved: restore it, or install another firmware."));
+                return;
+            }
+        }
+        self.log("Restarted; not on USB MIDI within 60 s".into());
+        say(AlertKind::Done, format!("{written} The unit restarted; it has not shown up on USB MIDI within 60 s \
+            (not every firmware has USB MIDI): look at its screen."));
+    }
+
     fn drop_unit(&self) {
         *self.unit.lock().unwrap() = None;
         *self.plan.lock().unwrap() = None;
@@ -432,7 +573,13 @@ impl Controller {
     /// read) every scan for as long as it stays plugged in.
     fn connect(&self, path: String) {
         self.work("connecting", move |c| {
-            let r = c.connect_now(&path);
+            let r = c.connect_now(&path).and_then(|()| {
+                // INSTALL was waiting for download mode: on with it
+                match c.with(|s| { s.how_to = None; s.install_after.take() }) {
+                    Some(id) => c.library_plan(&id),
+                    None => Ok(()),
+                }
+            });
             let mut f = c.failures.lock().unwrap();
             match &r {
                 Ok(()) => *f = (String::new(), 0),
@@ -502,6 +649,7 @@ impl Controller {
             let mut asked = c.suggested.lock().unwrap();
             !asked.contains(&id) && { asked.push(id); true }
         });
+        remember_unit(&unit, &view);
         let mut unit = unit;
         unit.show_on_unit();
         *c.unit.lock().unwrap() = Some(unit);
@@ -528,6 +676,7 @@ impl Controller {
         };
         let guard = self.unit.lock().unwrap();
         let Some(unit) = guard.as_ref() else { return };
+        let boot_first = if mode == Mode::Firmware { unit.bootloader_suggestion() } else { None };
         let need = |c: &Controller, what: &str| {
             *c.plan.lock().unwrap() = None;
             c.with(|s| {
@@ -598,6 +747,7 @@ impl Controller {
                 self.with(|s| {
                     s.marks = marks;
                     s.plan = Some(view);
+                    s.boot_first = boot_first;
                 });
             }
             Err(e) => {
@@ -631,6 +781,26 @@ impl Controller {
             return;
         }
         self.replan();
+    }
+
+    /// Two steps (REQ-BOOT-01): m-bootloader first, for review as any write;
+    /// once it is written the firmware, still chosen, is planned and reviewed.
+    pub fn bootloader_then_firmware(&self) {
+        if self.choose(Shared::begin_two_step) {
+            self.replan();
+        }
+    }
+
+    /// The two steps given up before step 1 was written: back to the firmware.
+    pub fn cancel_two_step(&self) {
+        if self.choose(Shared::drop_two_step) {
+            self.replan();
+        }
+    }
+
+    /// The firmware's review was opened after step 1.
+    pub fn clear_review_next(&self) {
+        self.with(|s| s.review_next = false);
     }
 
     /// The answer to the m-bootloader recommendation: yes chooses installing
@@ -713,6 +883,235 @@ impl Controller {
                 c.replan();
             }
         });
+    }
+
+    /// Reads the firmware library for the Library tab: The Firmware Hub's list
+    /// (fetched at most once a day), the official packages imported, and which
+    /// packages are on this computer. In a thread; offline, the list on disk.
+    pub fn load_library(&self) {
+        if !self.with(|s| !s.library_loading && { s.library_loading = true; true }) {
+            return;
+        }
+        let c = self.clone();
+        std::thread::spawn(move || {
+            use crate::library::{Http, Library, Synced, default_dir};
+            let lib = Library::new(default_dir());
+            let mut note = match lib.sync(&Http::new(), chrono::Utc::now()) {
+                Ok(Synced::Fetched) => "List fetched now".to_string(),
+                Ok(Synced::Recent(at)) => format!("List fetched {at}"),
+                Err(e) => format!("Offline, the list on disk: {e}"),
+            };
+            let mut items: Vec<LibItem> = lib.imported().into_iter().map(|(id, version, name)| LibItem {
+                id: id.into(), name: name.into(), version: version.into(), byline: "M-VAVE · official, imported".into(),
+                kinds: "stock".into(), chip: "any".into(), beta: false, saved: true, elsewhere: false, older: vec![],
+                favorite: false,
+            }).collect();
+            match lib.catalog() {
+                Ok(Some(cat)) => {
+                    lib.index_saved(&cat);
+                    note = format!("{note} · {} firmwares, list updated {}", cat.entries.len(), cat.updated);
+                    for e in &cat.entries {
+                        if items.iter().any(|i| i.id == e.id) {
+                            continue;
+                        }
+                        items.push(LibItem {
+                            id: e.id.clone(), name: e.name.clone(), version: e.version.clone(),
+                            byline: format!("{} · {}", if e.author.is_empty() { "?" } else { &e.author }, e.license),
+                            kinds: e.kinds.join(" "), chip: e.chip.clone(), beta: e.beta, saved: lib.downloaded(e),
+                            elsewhere: e.elsewhere, older: lib.older_versions(e), favorite: false,
+                        });
+                    }
+                }
+                Ok(None) => note = format!("{note} · no list on this computer yet"),
+                Err(e) => note = format!("{note} · {e}"),
+            }
+            let favorites = lib.favorites();
+            for i in &mut items {
+                i.favorite = favorites.contains(&i.id);
+            }
+            c.with(|s| {
+                s.library = items;
+                s.library_note = note;
+                s.library_loading = false;
+            });
+        });
+    }
+
+    /// Downloads a firmware of the library from its author's release and keeps
+    /// it only if its SHA-256 matches the list (GET): no unit needed, for
+    /// installing later, offline too.
+    pub fn library_get(&self, id: String) {
+        if !self.with(|s| !s.library_getting.contains(&id) && { s.library_getting.push(id.clone()); true }) {
+            return;
+        }
+        let c = self.clone();
+        std::thread::spawn(move || {
+            use crate::library::{Http, Library, default_dir};
+            let lib = Library::new(default_dir());
+            let result = lib.catalog().and_then(|cat| {
+                let cat = cat.ok_or("no firmware list on this computer: RELOAD")?;
+                let e = cat.find(&id).ok_or_else(|| format!("{id} is no longer in the firmware list"))?.clone();
+                c.log(format!("Library: downloading {} {}", e.name, e.version));
+                lib.get(&e, &Http::new()).map(|(path, identity)| (e, path, identity))
+            });
+            match &result {
+                Ok((e, path, identity)) => c.log(format!("Library: {} {} saved ({identity}, SHA-256 matches the list): {}",
+                                                       e.name, e.version, path.display())),
+                Err(err) => c.log(format!("Refused: {err}")),
+            }
+            c.with(|s| {
+                s.library_getting.retain(|x| x != &id);
+                match result {
+                    Ok(_) => if let Some(i) = s.library.iter_mut().find(|i| i.id == id) { i.saved = true; i.older.clear(); },
+                    Err(err) => s.alert = Some((AlertKind::Refused, format!("Refused: {err}"))),
+                }
+            });
+        });
+    }
+
+    /// Stars or unstars a firmware of the library (kept on this computer).
+    pub fn library_favorite(&self, id: String, on: bool) {
+        use crate::library::{Library, default_dir};
+        match Library::new(default_dir()).set_favorite(&id, on) {
+            Ok(()) => self.with(|s| if let Some(i) = s.library.iter_mut().find(|i| i.id == id) { i.favorite = on; }),
+            Err(e) => self.log(format!("Refused: {e}")),
+        }
+    }
+
+    /// Deletes every downloaded package of a firmware from this computer (the
+    /// window asked first); the unit is not touched.
+    pub fn library_delete(&self, id: String) {
+        use crate::library::{Library, default_dir};
+        match Library::new(default_dir()).delete(&id) {
+            Ok(gone) => {
+                self.log(format!("Library: deleted {} file(s) of {id}", gone.len()));
+                self.with(|s| {
+                    if s.files.get("firmware").is_some_and(|f| gone.contains(f)) {
+                        s.files.remove("firmware");
+                    }
+                    if let Some(i) = s.library.iter().position(|i| i.id == id) {
+                        if s.library[i].byline.starts_with("M-VAVE · official") {
+                            s.library.remove(i);
+                        } else {
+                            s.library[i].saved = false;
+                            s.library[i].older.clear();
+                        }
+                    }
+                });
+                self.replan();
+            }
+            Err(e) => {
+                self.log(format!("Refused: {e}"));
+                self.with(|s| s.alert = Some((AlertKind::Refused, format!("Refused: {e}"))));
+            }
+        }
+    }
+
+    /// Installs a firmware of the library: downloaded and checked if needed,
+    /// then chosen as the firmware to flash and planned, for REVIEW & FLASH. A
+    /// unit with M-VAVE's stock bootloader is offered m-bootloader first
+    /// (REQ-BOOT-01).
+    pub fn library_install(&self, id: String) {
+        self.work("the library", move |c| {
+            // download mode first: the soft key, or the keys by hand (then the scan carries on)
+            if c.unit.lock().unwrap().is_none() {
+                match c.reach_download_mode()? {
+                    Some(path) => c.connect_now(&path)?,
+                    None => {
+                        c.with(|s| s.install_after = Some(id));
+                        return Ok(());
+                    }
+                }
+            }
+            c.library_plan(&id)
+        });
+    }
+
+    /// INSTALL's wait for download mode given up.
+    pub fn cancel_install_wait(&self) {
+        if self.with(|s| { s.how_to = None; s.install_after.take() }).is_some() {
+            self.log("Install cancelled".into());
+        }
+    }
+
+    pub fn clear_library_review(&self) {
+        self.with(|s| s.library_review = false);
+    }
+
+    /// The unit in download mode for INSTALL: the one already in it, or the one
+    /// on USB MIDI switched by the soft key. None when it has to be switched by
+    /// hand: `how_to` then says how, for this unit as last read.
+    fn reach_download_mode(&self) -> Result<Option<String>, Error> {
+        let devs = find_devices();
+        match devs.len() {
+            0 => {}
+            1 => return Ok(Some(devs[0].0.clone())),
+            _ => return Err(Error::Refused("more than one unit in download mode: connect only one".into())),
+        }
+        let units = crate::midi::find_units();
+        if units.len() > 1 {
+            return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into()));
+        }
+        let running = units.first().map(|u| u.name.clone());
+        if let Some(u) = units.first() {
+            match u.soft_key() {
+                Ok(()) => {
+                    self.log(format!("Sent the {} the download-mode message over USB MIDI; waiting for it", u.name));
+                    self.with(|s| s.midi = None);
+                    for _ in 0..40 {
+                        std::thread::sleep(Duration::from_millis(500));
+                        if let Some(d) = find_devices().into_iter().next() {
+                            return Ok(Some(d.0));
+                        }
+                        if crate::scsi::needs_sg_driver() {
+                            self.sg_missing.store(true, Ordering::SeqCst);
+                            return Err(Error::Refused(crate::scsi::SG_DRIVER.into()));
+                        }
+                    }
+                    self.log(format!("The {} did not come back in download mode within 20 s: its firmware may not \
+                                      know the message", u.name));
+                }
+                Err(e) => self.log(format!("Could not send the {} the download-mode message: {e}", u.name)),
+            }
+        } else {
+            self.log("No unit in download mode or running on USB MIDI".into());
+        }
+        let (rescue, firmware, model) = last_unit();
+        self.with(|s| s.how_to = Some(how_to(&rescue, &firmware, &model, running.as_deref())));
+        Ok(None)
+    }
+
+    /// Plans installing a firmware of the library on the unit connected; the
+    /// window opens its review.
+    fn library_plan(&self, id: &str) -> Result<(), Error> {
+        let c = self;
+        let id = id.to_string();
+        {
+            use crate::library::{Http, Library, default_dir, unit_chip};
+            let lib = Library::new(default_dir());
+            let inst = lib.installable(&id, &Http::new()).map_err(Error::Refused)?;
+            {
+                let g = c.unit.lock().unwrap();
+                let u = g.as_ref().ok_or_else(|| Error::Refused("connect a unit in download mode first".into()))?;
+                if !inst.fits_chip(unit_chip(u.dev.flash_id())) {
+                    return Err(Error::Refused(format!("{} is marked for the FM-1's older flash chip (0x856014) only; \
+                                                       this unit has the newer one", inst.name)));
+                }
+            }
+            // m-bootloader first, on a unit with the stock one: REVIEW & FLASH opens the two steps
+            c.log(format!("Library: {} {} chosen ({})", inst.name, inst.version, inst.credit));
+            c.choose(|s| {
+                s.files.insert("firmware", inst.path.clone());
+                s.mode = Mode::Firmware;
+                if let Some(i) = s.library.iter_mut().find(|i| i.id == inst.id) {
+                    i.saved = true;
+                }
+            });
+            c.with(|s| if s.phase == Phase::Done { s.phase = Phase::Ready });
+            c.replan_now();
+            c.with(|s| s.library_review = true);
+            Ok(())
+        }
     }
 
     pub fn pick_backup(&self, path: PathBuf) {
@@ -851,6 +1250,14 @@ impl Controller {
                     and switch it off and on to start it, or choose another operation.")));
             });
             *c.plan.lock().unwrap() = None;
+            // step 1 of 2 written (m-bootloader): the firmware, still chosen, is step 2
+            if c.choose(|s| s.end_step_one(total)) {
+                c.log("Step 1 of 2 done: m-bootloader written and verified. Step 2: the firmware".into());
+                c.replan_now();
+            } else {
+                // done: the unit leaves download mode and starts what was written
+                c.restart_unit(total);
+            }
             Ok(())
         });
         if picking {
@@ -983,4 +1390,58 @@ fn recent_backups(dir: &Path, n: usize) -> Vec<BackupInfo> {
         BackupInfo { name: p.file_name().unwrap().to_string_lossy().into_owned(), path: p,
                      time: time.format("%Y-%m-%d %H:%M").to_string(), firmware }
     }).collect()
+}
+
+/// Where the last unit read is remembered: the keys that switch it by hand.
+fn unit_memo() -> PathBuf {
+    crate::library::default_dir().join("last-unit.txt")
+}
+
+/// Remembers what INSTALL needs to say how to switch this unit by hand.
+fn remember_unit(u: &Unit, view: &DeviceView) {
+    let rescue = match u.analysis.bootloader {
+        crate::boards::BootKind::Open => "yes",
+        crate::boards::BootKind::Stock => "no",
+        _ => "",
+    };
+    let memo = unit_memo();
+    let _ = std::fs::create_dir_all(memo.parent().unwrap_or(Path::new(".")));
+    let _ = std::fs::write(memo, format!("rescue={rescue}\nfirmware={}\nmodel={}\n", view.firmware, view.model));
+}
+
+/// The last unit read: rescue ("yes", "no", "" unknown), firmware, model.
+fn last_unit() -> (String, String, String) {
+    let text = std::fs::read_to_string(unit_memo()).unwrap_or_default();
+    let get = |k: &str| text.lines().find_map(|l| l.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
+        .unwrap_or_default().to_string();
+    (get("rescue"), get("firmware"), get("model"))
+}
+
+/// How to put the unit in download mode by hand, from what was last read on
+/// it (as the Android app says it): m-bootloader's key while switching on,
+/// OCT- and OCT+ on the firmwares that know them; M-VAVE's own firmware on the
+/// stock bootloader only by the soft key. `running`: its name on USB MIDI.
+pub(crate) fn how_to(rescue: &str, firmware: &str, model: &str, running: Option<&str>) -> String {
+    let rec = if model.contains("SMK") { "SEQ REC" } else { "REC" };
+    let fw = format!("{firmware} {}", running.unwrap_or_default()).to_lowercase();
+    let oct = ["felucca", "caravel", "sloop", "snoop"].iter().any(|n| fw.contains(n));
+    let why = match running {
+        Some(n) => format!("The {n} did not switch by itself: its firmware may not know the message from this \
+                            computer. Switch it by hand:"),
+        None => "This computer can't see the unit running. Check it is connected and switched on, or switch it \
+                 by hand:".into(),
+    };
+    let keys = match rescue {
+        "yes" => format!("1 · Switch it off.\n2 · Hold {rec} and switch it on.\n3 · Let go of {rec} once M-Flasher \
+                          finds it.{}", if oct { "\nOr, with it running: hold OCT- and OCT+ together for 5 s." } else { "" }),
+        _ if oct => "With it running: hold OCT- and OCT+ together for 5 s.".into(),
+        "no" => "It has M-VAVE's stock bootloader: its keys can't do it, only the message from this computer. \
+                 Switch it on, connect it with a data cable (some cables only charge) and press INSTALL again.".into(),
+        _ => format!("· With m-bootloader: hold {rec} while switching it on.\n\
+                      · With Felucca, SLOOP or Snoop37 running: hold OCT- and OCT+ together for 5 s.\n\
+                      · With M-VAVE's own firmware: switch it on, connect it and press INSTALL again: this computer \
+                      switches it."),
+    };
+    format!("{why}\n{keys}\nM-Flasher is waiting: once the unit is in download mode it reads it and opens the \
+             review. Nothing is written until you press WRITE there.")
 }

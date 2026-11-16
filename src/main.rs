@@ -11,6 +11,7 @@ mod controller;
 mod fonts;
 mod formats;
 mod jl;
+mod library;
 mod midi;
 mod ops;
 mod scsi;

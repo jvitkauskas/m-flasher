@@ -1507,3 +1507,173 @@ fn a_unit_without_a_loader_is_not_asked_again() {
     let (_, c) = start(MockRom { fail_online: 4, ..Default::default() });
     assert!(matches!(c, Err(ScsiError::Failed(e)) if e.contains("0xfc0a")));
 }
+
+/// The library's install (REQ-BOOT-01): m-bootloader before the firmware on a
+/// unit with M-VAVE's stock bootloader, each step in its own area.
+mod library_install {
+    use super::*;
+    use crate::boards::BootKind;
+    use crate::library::{InstallOptions, Installable, after_install_note, bootloader_step, unit_chip};
+
+    fn felucca_like() -> Vec<u8> {
+        let f = image_016(b"FM-1_918\0");
+        package("FM-1_918", &f[..0xA9000])
+    }
+
+    fn inst(data: Vec<u8>, official: bool, chip: &str) -> Installable {
+        Installable { id: "x".into(), name: "Test firmware".into(), version: "1".into(), chip: chip.into(), data, official,
+                      credit: String::new(), path: std::path::PathBuf::new() }
+    }
+
+    fn stock_unit() -> Session<FakeFlash> {
+        fm1_session(with_boot_area(fm1_016_image(), &stock_boot()), "lib-install")
+    }
+
+    #[test]
+    fn a_stock_unit_gets_m_bootloader_before_the_firmware() {
+        let mut s = stock_unit();
+        let i = inst(felucca_like(), false, "new");
+        let o = InstallOptions::default();
+        let (boot, why) = bootloader_step(&s, &i, &o).unwrap().expect("m-bootloader first");
+        assert!(why.contains("REC"), "{why}");
+        assert!(!boot.sectors.is_empty() && boot.sectors.iter().all(|&a| a < BOOT_AREA), "step 1 writes only the boot area");
+        apply(&mut s, &boot).unwrap();
+        assert_eq!(s.analysis.bootloader, BootKind::Open);
+        let fw = s.plan_firmware(&i.data).unwrap();
+        assert!(!fw.sectors.is_empty() && fw.sectors.iter().all(|&a| a >= BOOT_AREA), "step 2 never touches the boot area");
+        apply(&mut s, &fw).unwrap();
+        assert_eq!(s.analysis.bootloader, BootKind::Open, "the firmware leaves m-bootloader in place");
+        assert_eq!(s.analysis.app_status, AppStatus::Ok);
+        assert!(after_install_note(&s, &o).is_none());
+        assert!(bootloader_step(&s, &i, &o).unwrap().is_none(), "installed once, not offered again");
+    }
+
+    #[test]
+    fn skipping_m_bootloader_leaves_the_recommendation() {
+        let mut s = stock_unit();
+        let i = inst(felucca_like(), false, "any");
+        let o = InstallOptions { skip_bootloader: true, ..Default::default() };
+        assert!(bootloader_step(&s, &i, &o).unwrap().is_none());
+        let fw = s.plan_firmware(&i.data).unwrap();
+        apply(&mut s, &fw).unwrap();
+        assert_eq!(s.analysis.bootloader, BootKind::Stock);
+        assert!(after_install_note(&s, &o).is_some_and(|n| n.contains("stock bootloader")));
+    }
+
+    #[test]
+    fn the_stock_bootloader_comes_back_only_from_an_official_package_that_can_start_the_unit() {
+        let (boot, _) = bundled_bootloader(&FM1).unwrap();
+        let s = fm1_session(with_boot_area(fm1_016_image(), boot), "lib-stock-boot");
+        let o = InstallOptions { stock_bootloader: true, ..Default::default() };
+        let community = inst(felucca_like(), false, "any");
+        assert!(matches!(bootloader_step(&s, &community, &o), Err(Error::Refused(m)) if m.contains("not an official")));
+        // official by its hash, but a boot area that can't start the unit: refused all the same
+        let stand_in = inst(felucca_like(), true, "any");
+        assert!(refused_boot_area(bootloader_step(&s, &stand_in, &o).map(|r| r.unwrap().0)));
+        assert!(after_install_note(&s, &o).is_none(), "putting back the stock bootloader is not followed by advice against it");
+    }
+
+    #[test]
+    fn the_older_chips_firmware_is_refused_on_the_newer_chip() {
+        assert_eq!(unit_chip(0x856014), Some("old"));
+        assert_eq!(unit_chip(0xB36014), Some("new"));
+        assert_eq!(unit_chip(0xEB6014), None, "the SMK-37's");
+        let old_only = inst(vec![], false, "old");
+        assert!(old_only.fits_chip(Some("old")) && !old_only.fits_chip(Some("new")));
+        assert!(inst(vec![], false, "new").fits_chip(Some("old")), "until the hub says otherwise (PRD Q2)");
+    }
+}
+
+/// The window's two steps (REQ-BOOT-01): the unit's part is in library_install.
+mod two_step {
+    use crate::controller::{Mode, Phase, Shared};
+
+    fn chosen() -> Shared {
+        let mut s = Shared::new("2.4".into(), std::env::temp_dir());
+        s.phase = Phase::Ready;
+        s.files.insert("firmware", "hortator-1.0.1.fwsc".into());
+        s
+    }
+
+    #[test]
+    fn step_one_is_m_bootloader_and_the_firmware_is_step_two() {
+        let mut s = chosen();
+        assert!(s.begin_two_step());
+        assert_eq!(s.mode, Mode::Bootloader);
+        assert!(s.firmware_after && !s.review_next);
+        assert!(s.end_step_one(4), "step 1 of two");
+        assert_eq!(s.mode, Mode::Firmware);
+        assert_eq!(s.phase, Phase::Ready);
+        assert!(s.review_next, "the firmware's review opens next");
+        assert!(s.alert.as_ref().is_some_and(|a| a.1.contains("Step 1 of 2") && a.1.contains("2.4")));
+        assert!(s.files.contains_key("firmware"), "the firmware stays chosen");
+        assert!(!s.end_step_one(4), "once only");
+    }
+
+    #[test]
+    fn a_plain_bootloader_write_is_not_step_one() {
+        let mut s = chosen();
+        s.mode = Mode::Bootloader;
+        assert!(!s.end_step_one(4));
+        assert_eq!(s.mode, Mode::Bootloader);
+        assert!(!s.review_next && s.alert.is_none());
+    }
+
+    #[test]
+    fn cancelling_step_one_goes_back_to_the_firmware() {
+        let mut s = chosen();
+        assert!(s.begin_two_step());
+        assert!(s.drop_two_step());
+        assert_eq!(s.mode, Mode::Firmware);
+        assert!(!s.firmware_after);
+        assert!(!s.end_step_one(4), "nothing follows a cancelled step 1");
+        assert!(!s.drop_two_step(), "nothing to drop");
+    }
+
+    #[test]
+    fn nothing_starts_while_busy() {
+        let mut s = chosen();
+        s.busy = true;
+        assert!(!s.begin_two_step());
+        assert_eq!(s.mode, Mode::Firmware);
+    }
+}
+
+mod download_mode {
+    use crate::controller::how_to;
+
+    #[test]
+    fn m_bootloader_says_rec_while_switching_on() {
+        let t = how_to("yes", "ChoralRoot", "FM-1", Some("ChoralRoot FM-1"));
+        assert!(t.contains("Hold REC and switch it on"));
+        assert!(!t.contains("OCT-"));
+        assert!(t.contains("did not switch by itself"));
+    }
+
+    #[test]
+    fn smk37_uses_seq_rec() {
+        assert!(how_to("yes", "", "SMK-37 Pro", None).contains("Hold SEQ REC"));
+    }
+
+    #[test]
+    fn felucca_adds_the_oct_keys() {
+        let t = how_to("yes", "Felucca", "FM-1", None);
+        assert!(t.contains("REC") && t.contains("OCT- and OCT+"));
+        assert!(how_to("no", "Felucca", "FM-1", None).starts_with("This computer can't see"));
+        assert!(how_to("", "", "FM-1", Some("Caravel")).contains("OCT- and OCT+ together for 5 s"));
+    }
+
+    #[test]
+    fn stock_firmware_on_stock_bootloader_has_no_keys() {
+        let t = how_to("no", "M-VAVE 015", "FM-1", None);
+        assert!(t.contains("its keys can't do it"));
+        assert!(!t.contains("Hold REC"));
+    }
+
+    #[test]
+    fn unknown_unit_lists_every_way() {
+        let t = how_to("", "", "", None);
+        assert!(t.contains("With m-bootloader") && t.contains("OCT-") && t.contains("M-VAVE's own firmware"));
+        assert!(t.contains("Nothing is written until you press WRITE"));
+    }
+}

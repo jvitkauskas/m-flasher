@@ -17,8 +17,9 @@ pub const SOFT_KEY: [u8; 6] = [0xF0, 0x22, 0x24, 0x35, 0x7D, 0xF7];
 
 /// Names under which the units appear on USB MIDI, each unit with the
 /// spellings its name may take. Nothing else is ever sent the soft key.
+/// Felucca 1.8 names its port "Caravel" (seen on an FM-1, 2026-11-16).
 const NAMES: [(&str, &[&str]); 3] =
-    [("FM-1", &["FM-1", "FM1", "MiniFM"]), ("SMK-37", &["SMK-37", "SMK37"]), ("Felucca", &["Felucca"])];
+    [("FM-1", &["FM-1", "FM1", "MiniFM"]), ("SMK-37", &["SMK-37", "SMK37"]), ("Felucca", &["Felucca", "Caravel"])];
 
 /// A unit found on USB MIDI.
 pub struct MidiUnit {
@@ -27,14 +28,47 @@ pub struct MidiUnit {
     port: sys::Port,
 }
 
+/// Port names the user gave for firmwares that name their port otherwise
+/// (fm1-dock: "Caravel"): `--port NAME`, or MFLASHER_MIDI_PORTS (comma
+/// separated), which the window reads too. Lowercase.
+static EXTRA: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static FROM_ENV: std::sync::Once = std::sync::Once::new();
+
+/// Treat MIDI ports whose names contain these (comma separated) as units.
+pub fn add_port_names(list: &str) {
+    let mut extra = EXTRA.lock().unwrap_or_else(|e| e.into_inner());
+    for n in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let n = n.to_ascii_lowercase();
+        if !extra.contains(&n) {
+            extra.push(n);
+        }
+    }
+}
+
+fn extra_names() -> Vec<String> {
+    FROM_ENV.call_once(|| {
+        if let Ok(v) = std::env::var("MFLASHER_MIDI_PORTS") {
+            add_port_names(&v);
+        }
+    });
+    EXTRA.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// Which unit a MIDI name is, if any.
 fn unit_of(name: &str) -> Option<&'static str> {
     let n = name.to_ascii_lowercase();
     NAMES.iter().find(|(_, spellings)| spellings.iter().any(|k| n.contains(&k.to_ascii_lowercase()))).map(|(unit, _)| *unit)
+        .or_else(|| extra_names().iter().any(|k| n.contains(k.as_str())).then_some("named by the user"))
 }
 
 fn known(name: &str) -> bool {
     unit_of(name).is_some()
+}
+
+/// Every MIDI output port's name, units or not (`m-flasher midi-ports`), and
+/// whether it is taken for a unit.
+pub fn port_names() -> Vec<(String, bool)> {
+    sys::all_names().into_iter().map(|n| { let k = known(&n); (n, k) }).collect()
 }
 
 /// The units on USB MIDI, each by its first port.
@@ -102,6 +136,13 @@ mod sys {
     pub struct Port {
         card: i32,
         name: String,
+    }
+
+    pub fn all_names() -> Vec<String> {
+        let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
+        super::asound_cards(&cards).into_iter()
+            .filter(|(n, _)| std::path::Path::new(&format!("/dev/snd/midiC{n}D0")).exists())
+            .map(|(_, name)| name).collect()
     }
 
     pub fn units() -> Vec<(String, Port)> {
@@ -396,6 +437,17 @@ mod sys {
         })
     }
 
+    pub fn all_names() -> Vec<String> {
+        LISTER.with_borrow_mut(|lister| {
+            if lister.is_none() {
+                *lister = MidiOutput::new("M-Flasher").ok();
+            }
+            let Some(out) = lister.as_ref() else { return vec![] };
+            refresh();
+            out.ports().iter().map(|p| out.port_name(p).unwrap_or_default()).collect()
+        })
+    }
+
     pub fn send(p: &Port, msg: &[u8]) -> Result<(), String> {
         let out = MidiOutput::new("M-Flasher").map_err(|e| e.to_string())?;
         let mut conn = out.connect(&p.0, "soft key").map_err(|e| e.to_string())?;
@@ -409,6 +461,9 @@ mod sys {
 mod sys {
     pub struct Port;
     pub fn units() -> Vec<(String, Port)> {
+        vec![]
+    }
+    pub fn all_names() -> Vec<String> {
         vec![]
     }
     pub fn send(_: &Port, _: &[u8]) -> Result<(), String> {
@@ -464,6 +519,16 @@ mod tests {
             Ok(()) => {}
             Err(e) => panic!("{e}"),
         }
+    }
+
+    #[test]
+    fn a_port_named_by_the_user_is_a_unit() {
+        assert!(known("Caravel"), "Felucca 1.8's port");
+        assert!(!known("Dock MIDI"));
+        assert!(first_ports(&names(&["Dock MIDI", "IAC Bus 1"])).is_empty());
+        add_port_names(" dock midi , ");
+        assert!(known("Dock MIDI") && known("DOCK MIDI Port 1") && !known("IAC Bus 1"));
+        assert_eq!(first_ports(&names(&["IAC Bus 1", "Dock MIDI"])), vec![1]);
     }
 
     #[test]

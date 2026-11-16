@@ -49,9 +49,23 @@ fn region_color(r: Region) -> Color32 {
     }
 }
 
+/// The left column: the unit and its operations, or the firmware library.
+#[derive(PartialEq, Clone, Copy)]
+enum Tab {
+    Device,
+    Library,
+}
+
+/// Rows of the Library tab shown at once.
+const LIB_ROWS: usize = 8;
+
 #[derive(PartialEq)]
 enum Dialog {
     None,
+    /// Library: delete a firmware's downloads (id, name, versions), asked first.
+    Delete(String, String, String),
+    /// Firmware on a unit with the stock bootloader: m-bootloader first (Figma screen 03).
+    TwoStep,
     Review,
     About,
     Model,
@@ -67,6 +81,17 @@ pub struct App {
     /// m-bootloader was accepted when recommended: its review opens once planned.
     review_when_planned: bool,
     fonts: crate::fonts::Fonts,
+    tab: Tab,
+    /// Library tab: only what this unit's flash chip takes; betas too; the first row shown.
+    lib_compatible: bool,
+    lib_beta: bool,
+    lib_first: usize,
+    /// Scrolling not yet a whole row.
+    lib_scroll: f32,
+    /// The Library tab's search: name, author, id or kind.
+    lib_query: String,
+    /// Library: only the starred firmwares.
+    lib_favorites: bool,
 }
 
 /// Where donations for code signing go (the About dialog).
@@ -82,7 +107,14 @@ impl App {
         fonts.install(&cc.egui_ctx);
         // MFLASHER_DIALOG=about opens the About dialog at start (for screenshots)
         let dialog = if std::env::var("MFLASHER_DIALOG").as_deref() == Ok("about") { Dialog::About } else { Dialog::None };
-        App { ctl: Controller::new(cc.egui_ctx.clone()), dialog, noise: None, nudged: f64::NEG_INFINITY, review_when_planned: false, fonts }
+        // MFLASHER_TAB=library opens the Library tab at start (for screenshots)
+        let tab = if std::env::var("MFLASHER_TAB").as_deref() == Ok("library") { Tab::Library } else { Tab::Device };
+        let ctl = Controller::new(cc.egui_ctx.clone());
+        if tab == Tab::Library {
+            ctl.load_library();
+        }
+        App { ctl, dialog, noise: None, nudged: f64::NEG_INFINITY, review_when_planned: false, fonts, tab,
+              lib_compatible: true, lib_beta: true, lib_first: 0, lib_scroll: 0.0, lib_query: String::new(), lib_favorites: false }
     }
 }
 
@@ -151,7 +183,21 @@ impl eframe::App for App {
             }
             self.review_when_planned = false;
         }
-        let modal = self.dialog != Dialog::None || st.alert.is_some() || st.suggest_boot.is_some();
+        if st.library_review && !st.busy && st.alert.is_none() && self.dialog == Dialog::None {
+            // library INSTALL planned: its review, or the two steps first (REQ-BOOT-01), as REVIEW & FLASH
+            self.ctl.clear_library_review();
+            if st.mode == Mode::Firmware && st.phase == Phase::Ready && st.plan.as_ref().is_some_and(|p| p.ready) {
+                self.dialog = if st.boot_first.is_some() { Dialog::TwoStep } else { Dialog::Review };
+            }
+        }
+        if st.review_next && !st.busy && st.alert.is_none() && self.dialog == Dialog::None {
+            // step 1 of 2 written: the firmware's review, as any write
+            self.ctl.clear_review_next();
+            if st.mode == Mode::Firmware && st.phase == Phase::Ready && st.plan.as_ref().is_some_and(|p| p.ready) {
+                self.dialog = Dialog::Review;
+            }
+        }
+        let modal = self.dialog != Dialog::None || st.alert.is_some() || st.suggest_boot.is_some() || st.how_to.is_some();
         let active = !modal && !busy; // clicks allowed
         let clicked = |id: &str, r: Rect| -> (bool, bool) {
             let resp = ui.interact(r, ui.id().with(id), Sense::click());
@@ -180,6 +226,25 @@ impl eframe::App for App {
         }
         if clicked("backups", board.r(1420.0 - aw - 34.0 - bw, 68.0, bw, 24.0)).0 && !modal {
             self.ctl.open_backups();
+        }
+        // the tabs (Figma 13hgI2LSoYUAyRWRptssIz, screens 01 and 02), left of BACKUPS
+        let tabs = [(Tab::Device, "DEVICE"), (Tab::Library, "LIBRARY")];
+        let tabs_w: f32 = tabs.iter().map(|(_, n)| p.measure(n, "tech", 17.0, 2.0)).sum::<f32>() + 30.0;
+        let mut tx = 1420.0 - aw - 34.0 - bw - 56.0 - tabs_w;
+        p.text(tx + tabs_w + 22.0, 80.0, Align2::CENTER_CENTER, "|", "tech", 17.0, LAVLINE, 0.0);
+        for (tab, name) in tabs {
+            let on = self.tab == tab;
+            let w = p.text(tx, 80.0, Align2::LEFT_CENTER, name, "tech", 17.0, if on { MINT } else { DIM }, 2.0);
+            if on {
+                p.rect(board.r(tx, 96.0, w, 2.0), MINT);
+            }
+            if clicked(&format!("tab-{name}"), board.r(tx - 6.0, 66.0, w + 12.0, 34.0)).0 && !modal && !on {
+                self.tab = tab;
+                if tab == Tab::Library {
+                    self.ctl.load_library();
+                }
+            }
+            tx += w + 30.0;
         }
         p.hline(36.0, 1500.0, 128.0, LAVLINE);
         p.vline(913.0, 142.0, 988.0, LAVLINE);
@@ -230,6 +295,7 @@ impl eframe::App for App {
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
+        if self.tab == Tab::Device {
         // ---- device info ----
         p.label(38.0, 388.0, "DEVICE INFO", Some(891.0));
         let dash = "–".to_string();
@@ -467,6 +533,8 @@ impl eframe::App for App {
         if pc && active && ready {
             if st.mode == Mode::Backup {
                 self.ctl.save_backup();
+            } else if st.mode == Mode::Firmware && st.boot_first.is_some() {
+                self.dialog = Dialog::TwoStep;
             } else {
                 self.dialog = Dialog::Review;
             }
@@ -514,8 +582,13 @@ impl eframe::App for App {
             clip.text(board.p(508.0, 920.0 + i as f32 * 19.0), Align2::LEFT_CENTER, l.as_str(), board.f("plex", 13.0), col);
         }
 
+        } else {
+            self.library_view(ui, &p, &st, active);
+        }
+
         // ---- flash map ----
         self.flash_map(ui, &p, &st);
+        self.safety_check(ui, &p, &st, active);
 
         // ---- dialogs ----
         self.dialogs(ui, &p, &st, &line);
@@ -531,11 +604,254 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// The Library tab: The Firmware Hub's list and the official packages,
+    /// below the LCD. INSTALL chooses the package for FLASH FIRMWARE and goes
+    /// back to the device, where REVIEW & FLASH writes it as any firmware.
+    fn library_view(&mut self, ui: &egui::Ui, p: &Painter, st: &Shared, active: bool) {
+        let board = p.b;
+        let clicked = |id: &str, r: Rect| -> (bool, bool) {
+            let resp = ui.interact(r, ui.id().with(id), Sense::click());
+            (resp.clicked(), resp.hovered())
+        };
+        let dev = st.device.as_ref();
+        // "old" or "new" from the flash chip's text, "0x856014 (old)"
+        let chip = dev.and_then(|d| if d.flash.contains("(new)") { Some("new") } else if d.flash.contains("(old)") { Some("old") } else { None });
+        p.label(38.0, 388.0, "FIRMWARE LIBRARY", Some(891.0));
+        // the search: typed text filters the list at once
+        let field = board.r(38.0, 404.0, 296.0, 30.0);
+        p.rect(field, hex(0x1d1917));
+        p.frame(field, if self.lib_query.is_empty() { hex(0x5a5060) } else { MINT }, 1.0);
+        draw_search(p, 52.0, 419.0, if self.lib_query.is_empty() { DIM } else { MINT });
+        let edit = egui::TextEdit::singleline(&mut self.lib_query)
+            .id(ui.id().with("lib-search"))
+            .frame(egui::Frame::NONE)
+            .font(board.f("plex", 15.0))
+            .text_color(INK)
+            .hint_text(egui::RichText::new("Search name, author, kind").color(hex(0x5c534d)).font(board.f("plex", 15.0)))
+            .desired_width(field.width() - 70.0 * board.s);
+        // a child Ui of its own on the board's layer: the view only holds a shared reference
+        let mut field_ui = egui::Ui::new(ui.ctx().clone(), ui.id().with("lib-search-ui"),
+            egui::UiBuilder::new().max_rect(board.r(70.0, 406.0, 232.0, 26.0)).layer_id(ui.layer_id()));
+        let resp = field_ui.add(edit);
+        // the favourites filter: a star with no key around it, filled when on
+        let fr = board.r(342.0, 405.0, 30.0, 28.0);
+        let (fc, fh) = clicked("lib-favorites", fr);
+        draw_star(p, 357.0, 419.0, 10.0, self.lib_favorites, if self.lib_favorites { WARN } else if fh { INK } else { DIM });
+        if fc && active {
+            self.lib_favorites = !self.lib_favorites;
+            self.lib_first = 0;
+        }
+        if resp.changed() {
+            self.lib_first = 0;
+        }
+        if !self.lib_query.is_empty() {
+            let x = board.r(308.0, 407.0, 24.0, 24.0);
+            let (xc, xh) = clicked("lib-search-clear", x);
+            p.text(320.0, 419.0, Align2::CENTER_CENTER, "×", "tech", 20.0, if xh { INK } else { DIM }, 0.0);
+            if xc {
+                self.lib_query.clear();
+                self.lib_first = 0;
+            }
+        }
+        if checkbox(ui, p, 384.0, 419.0, "This unit only", self.lib_compatible, active) {
+            self.lib_compatible = !self.lib_compatible;
+            self.lib_first = 0;
+        }
+        if checkbox(ui, p, 572.0, 419.0, "Betas", self.lib_beta, active) {
+            self.lib_beta = !self.lib_beta;
+            self.lib_first = 0;
+        }
+        let refresh = board.r(774.0, 405.0, 100.0, 28.0);
+        let (rc, rh) = clicked("lib-refresh", refresh);
+        key(p, refresh, false, rh && active, !active || st.library_loading);
+        p.text(824.0, 419.0, Align2::CENTER_CENTER, "RELOAD", "cond", 15.0, KEYINK, 1.2);
+        if rc && active && !st.library_loading {
+            self.ctl.load_library();
+        }
+        let fits = |i: &crate::controller::LibItem| !(chip == Some("new") && i.chip == "old");
+        let searching = !self.lib_query.trim().is_empty();
+        let matches = |i: &crate::controller::LibItem| {
+            crate::library::matches_search(&self.lib_query, &[&i.name, &i.id, &i.byline, &i.kinds, &i.version])
+        };
+        // what the search finds before the filters: what they hide is said, never silently lost
+        let found = st.library.iter().filter(|i| matches(i)).count();
+        let shown: Vec<&crate::controller::LibItem> = st.library.iter()
+            .filter(|i| matches(i))
+            .filter(|i| !self.lib_favorites || i.favorite)
+            .filter(|i| self.lib_beta || !i.beta)
+            .filter(|i| !self.lib_compatible || (fits(i) && !i.elsewhere))
+            .collect();
+        // scrolling over the list moves it a row at a time
+        let list = board.r(38.0, 440.0, 853.0, LIB_ROWS as f32 * 62.0);
+        if ui.rect_contains_pointer(list) && !shown.is_empty() {
+            self.lib_scroll -= ui.input(|i| i.smooth_scroll_delta.y) / (62.0 * board.s);
+            let max = shown.len().saturating_sub(LIB_ROWS);
+            while self.lib_scroll >= 1.0 { self.lib_scroll -= 1.0; self.lib_first = (self.lib_first + 1).min(max); }
+            while self.lib_scroll <= -1.0 { self.lib_scroll += 1.0; self.lib_first = self.lib_first.saturating_sub(1); }
+        }
+        self.lib_first = self.lib_first.min(shown.len().saturating_sub(LIB_ROWS));
+        if st.library_loading && st.library.is_empty() {
+            p.text(56.0, 480.0, Align2::LEFT_CENTER, "READING THE FIRMWARE LIST…", "tech", 16.0, LAV, 2.0);
+        } else if shown.is_empty() {
+            let why = if self.lib_favorites && !searching {
+                "No favourites yet: star a firmware with ☆ to find it here.".to_string()
+            } else if !searching { "No firmwares to show: RELOAD, or change the filters above.".to_string() }
+                else { format!("Nothing matches \"{}\"{}.", self.lib_query.trim(),
+                               if self.lib_compatible || !self.lib_beta { " with these filters: try without them" } else { "" }) };
+            p.text(56.0, 480.0, Align2::LEFT_CENTER, &why, "tech", 15.0, DIM, 0.3);
+        }
+        for (k, item) in shown.iter().skip(self.lib_first).take(LIB_ROWS).enumerate() {
+            let y = 440.0 + k as f32 * 62.0;
+            let row = board.r(38.0, y, 853.0, 56.0);
+            // INSTALL installs what is on this computer: GET (or UPDATE) downloads first
+            // with no unit in download mode, INSTALL switches it first
+            let installable = active && item.saved && !item.elsewhere && fits(item);
+            let getting = st.library_getting.contains(&item.id);
+            // not on this computer yet: GET downloads it alone, no unit needed (installing later, offline too);
+            // an older version is: UPDATE
+            let update = !item.saved && !item.older.is_empty();
+            let gettable = !item.saved && !item.elsewhere && active && !getting;
+            let deletable = item.saved || !item.older.is_empty();
+            let br = board.r(728.0, y + 9.0, 146.0, 38.0);
+            let (bc, bh) = clicked(&format!("lib-{}", item.id), br);
+            let gr = board.r(632.0, y + 9.0, 86.0, 38.0);
+            let (gc, gh) = if !item.saved && !item.elsewhere { clicked(&format!("lib-get-{}", item.id), gr) } else { (false, false) };
+            let tr = board.r(if item.saved { 674.0 } else { 584.0 }, y + 9.0, 44.0, 38.0);
+            let (tc, th) = if deletable { clicked(&format!("lib-del-{}", item.id), tr) } else { (false, false) };
+            p.rect(row, if (bh && installable) || (gh && gettable) || (th && active) { hex(0x312a26) } else { hex(0x221d1a) });
+            p.frame(row, if item.saved { KEYLINE } else { hex(0x3c3433) }, 1.0);
+            // the star: no key around it, filled and amber when starred
+            let sr = board.r(44.0, y + 6.0, 28.0, 26.0);
+            let (sc, sh) = clicked(&format!("lib-star-{}", item.id), sr);
+            draw_star(p, 58.0, y + 19.0, 9.0, item.favorite, if item.favorite { WARN } else if sh { INK } else { DIM });
+            if sc && active {
+                self.ctl.library_favorite(item.id.clone(), !item.favorite);
+            }
+            let nw = p.text_fit(76.0, y + 19.0, &item.name.to_uppercase(), "cond", 20.0, 400.0, INK, 1.0);
+            p.text(76.0 + nw + 10.0, y + 19.0, Align2::LEFT_CENTER, &item.version, "tech", 14.0, DIM, 0.0);
+            let mut tags = vec![item.kinds.to_uppercase()];
+            if item.beta { tags.push("BETA".into()); }
+            if item.saved { tags.push("SAVED · SHA-256 OK".into()); }
+            if !fits(item) { tags.push("OLDER CHIP ONLY".into()); }
+            if getting { tags.push("DOWNLOADING…".into()); }
+            if update { tags.push(format!("{} SAVED · NEW {}", item.older.join(", "), item.version)); }
+            let room = match (item.saved, item.elsewhere, deletable) { (true, _, _) => 600.0, (_, true, _) => 650.0, (_, _, true) => 520.0, _ => 560.0 };
+            p.text_fit(76.0, y + 41.0, &format!("{} · {}", item.byline, tags.join(" · ")), "tech", 13.0, room - 22.0,
+                       if fits(item) { LAV } else { BAD }, 0.6);
+            let label = if item.elsewhere { "AUTHOR'S SITE" } else if !fits(item) { "NOT FOR THIS" } else { "INSTALL" };
+            key(p, br, false, bh && installable, !installable);
+            p.text(801.0, y + 28.0, Align2::CENTER_CENTER, label, "cond", 16.0, KEYINK, 1.2);
+            if !item.saved && !item.elsewhere {
+                key(p, gr, false, gh && gettable, !gettable);
+                p.text(675.0, y + 28.0, Align2::CENTER_CENTER, if getting { "…" } else if update { "UPDATE" } else { "GET" }, "cond", 16.0, KEYINK, 1.2);
+                if gc && gettable {
+                    self.ctl.library_get(item.id.clone());
+                }
+            }
+            if deletable {
+                key(p, tr, false, th && active, !active);
+                draw_trash(p, tr.center().x / board.s - board.o.x / board.s, y + 28.0, KEYINK);
+                if tc && active {
+                    let versions = if item.saved { std::iter::once(item.version.clone()).chain(item.older.iter().cloned()).collect::<Vec<_>>() }
+                                   else { item.older.clone() };
+                    self.dialog = Dialog::Delete(item.id.clone(), item.name.clone(), versions.join(", "));
+                }
+            }
+            if bc && installable {
+                self.ctl.library_install(item.id.clone());
+                self.tab = Tab::Device;
+            } else if bc && !active {
+                self.nudged = ui.input(|i| i.time);
+            }
+        }
+        let count = if shown.len() > LIB_ROWS {
+            format!("{}–{} OF {}", self.lib_first + 1, (self.lib_first + LIB_ROWS).min(shown.len()), shown.len())
+        } else {
+            format!("{} FOUND", shown.len())
+        };
+        p.text(760.0, 419.0, Align2::RIGHT_CENTER, &count, "tech", 12.0, LAV, 1.2);
+        let hidden = found - shown.len();
+        if hidden > 0 {
+            p.text(760.0, 436.0, Align2::RIGHT_CENTER,
+                   &format!("{hidden} MORE HIDDEN BY {}", match (self.lib_favorites, self.lib_compatible, self.lib_beta) {
+                       (true, false, true) => "FAVOURITES", (false, true, true) => "THIS UNIT ONLY",
+                       (false, false, false) => "BETAS OFF", _ => "THE FILTERS" }),
+                   "tech", 11.0, WARN, 1.0);
+        }
+        let note = if dev.is_none() { "GET downloads for later; to install, connect a unit in download mode." }
+                   else { "INSTALL chooses the firmware; REVIEW & FLASH writes it." };
+        p.text_fit(48.0, 950.0, &format!("{note}  {}", st.library_note), "tech", 13.0, 840.0, DIM, 0.3);
+        p.text(48.0, 974.0, Align2::LEFT_CENTER, crate::library::ATTRIBUTION, "tech", 13.0, LAV, 0.6);
+    }
+
+    /// The unit's safety at a glance (REQ-BOOT-01 first): each check passed or
+    /// in need of attention, with the action that fixes it where there is one.
+    fn safety_check(&mut self, ui: &egui::Ui, p: &Painter, st: &Shared, active: bool) {
+        let board = p.b;
+        let Some(d) = st.device.as_ref() else { return };
+        let smk = d.model.contains("SMK");
+        let (rec, menu) = if smk { ("SEQ REC", "SEQ PLAY") } else { ("REC", "PLAY") };
+        let open = d.bootloader.starts_with("m-bootloader");
+        let stock = d.bootloader.starts_with("stock");
+        let tested = d.flash.contains("(old)") || d.flash.contains("(new)") || smk;
+        // (name, passed, what it says, action label, action)
+        let checks: [(&str, bool, String, Option<(&str, u8)>); 4] = [
+            ("RECOVERY", open,
+             if open { format!("m-bootloader · {rec}: download mode · {menu}: menu") }
+             else if stock { "stock bootloader: no recovery from the keys".into() }
+             else { format!("bootloader {}", d.bootloader) },
+             if stock { Some(("INSTALL", 1)) } else { None }),
+            ("BACKUP", st.backup_saved.is_some(),
+             match &st.backup_saved { Some(n) => format!("saved this session · {n}"), None => "none of this session yet".into() },
+             if st.backup_saved.is_none() { Some(("SAVE", 2)) } else { None }),
+            ("FIRMWARE", d.app_ok,
+             if d.app_ok { format!("{} · checks OK", d.firmware) } else { format!("{}: reinstall it from LIBRARY", d.app) },
+             None),
+            ("CHIP", d.chip_key_ok && tested,
+             format!("chip key {}{} · flash {}{}", d.chip_key, if d.chip_key_ok { "" } else { " damaged" },
+                     d.flash, if tested { "" } else { ": untested with m-bootloader" }),
+             None),
+        ];
+        let need = checks.iter().filter(|c| !c.1).count();
+        p.label(938.0, 902.0, "SAFETY CHECK", Some(1310.0));
+        p.text(1500.0, 902.0, Align2::RIGHT_CENTER, &if need == 0 { "ALL CLEAR".to_string() } else { format!("{need} NEED ATTENTION") },
+               "tech", 13.0, if need == 0 { MINT } else { WARN }, 1.4);
+        for (k, (name, ok, text, action)) in checks.iter().enumerate() {
+            let y = 926.0 + k as f32 * 20.0;
+            if *ok {
+                p.p.add(Shape::line(vec![board.p(942.0, y), board.p(946.0, y + 4.0), board.p(953.0, y - 5.0)], Stroke::new(2.0 * board.s, MINT)));
+            } else {
+                p.p.add(Shape::convex_polygon(vec![board.p(947.5, y - 7.0), board.p(955.0, y + 6.0), board.p(940.0, y + 6.0)], WARN, Stroke::NONE));
+                p.text(947.5, y + 1.5, Align2::CENTER_CENTER, "!", "tech", 11.0, hex(0x1a1410), 0.0);
+            }
+            p.text(966.0, y, Align2::LEFT_CENTER, name, "tech", 13.0, LAV, 1.4);
+            let room = if action.is_some() { 330.0 } else { 410.0 };
+            p.text_fit(1062.0, y, text, "plex", 13.0, room, if *ok { INK } else { WARN }, 0.0);
+            if let Some((label, code)) = action {
+                let r = board.r(1410.0, y - 9.0, 90.0, 18.0);
+                let resp = ui.interact(r, ui.id().with(("safety", *code)), Sense::click());
+                let enabled = active && st.phase != Phase::Working;
+                key(p, r, false, resp.hovered() && enabled, !enabled);
+                p.text(1455.0, y, Align2::CENTER_CENTER, label, "cond", 13.0, KEYINK, 1.0);
+                if resp.clicked() && enabled {
+                    match code {
+                        // install m-bootloader: reviewed as any write once planned
+                        1 => self.review_when_planned = self.ctl.answer_boot_suggestion(true),
+                        _ => self.ctl.save_backup(),
+                    }
+                }
+            }
+        }
+    }
+
     fn flash_map(&mut self, ui: &egui::Ui, p: &Painter, st: &Shared) {
         let (board, s, painter) = (p.b, p.b.s, p.p);
         let dev = st.device.as_ref();
         p.label(938.0, 148.0, "FLASH MAP", Some(1310.0));
-        p.text(1500.0, 148.0, Align2::RIGHT_CENTER, "1 MiB = 256 × 4 KiB", "tech", 15.0, LAV, 1.0);
+        let hovered_now = st.device.is_some() && ui.rect_contains_pointer(board.r(938.0, 170.0, 562.0, 570.0));
+        if !hovered_now {
+            p.text(1500.0, 148.0, Align2::RIGHT_CENTER, "1 MiB = 256 × 4 KiB", "tech", 15.0, LAV, 1.0);
+        }
         let (gx, gy, gw, gh, pad, gap) = (972.0, 198.0, 528.0, 532.0, 4.0, 5.0);
         let cw = (gw - 2.0 * pad - 15.0 * gap) / 16.0;
         let ch = (gh - 2.0 * pad - 15.0 * gap) / 16.0;
@@ -650,9 +966,10 @@ impl App {
                 Some(Mark::Now) => " · writing now",
                 None => "",
             };
-            p.text(938.0, 906.0, Align2::LEFT_CENTER,
+            // in the map's heading: the space below is the safety check's
+            p.text(1500.0, 148.0, Align2::RIGHT_CENTER,
                 &format!("SECTOR {:02X} · 0x{:05X}-0x{:05X} · {}{what}", i, i * 0x1000, i * 0x1000 + 0xFFF, st.map[i].name()),
-                "plex", 14.0, DIM, 0.0);
+                "plex", 14.0, INK, 0.0);
         }
     }
 
@@ -669,6 +986,8 @@ impl App {
             let mut t2 = text.clone();
             if let Some(f) = t2.get_mut(0..1) { f.make_ascii_uppercase(); }
             (t, t2.split('\n').map(|l| (l.to_string(), c)).collect(), vec![("OK", 1)])
+        } else if let Some(text) = &st.how_to {
+            ("PUT THE UNIT IN DOWNLOAD MODE", text.split('\n').map(|l| (l.to_string(), INK)).collect(), vec![("CANCEL", 12)])
         } else if let (Some(menu_key), Dialog::None) = (st.suggest_boot, &self.dialog) {
             ("INSTALL M-BOOTLOADER?", vec![
                 ("This unit has M-VAVE's stock bootloader. We recommend installing m-bootloader: if a firmware ever \
@@ -695,6 +1014,27 @@ impl App {
                     b.push(("Do not unplug or switch off the unit while it writes.".into(), BAD));
                     ("REVIEW", b, vec![("CANCEL", 0), ("WRITE", 2)])
                 }
+                Dialog::TwoStep => {
+                    let Some(plan) = st.plan.as_ref().filter(|p| p.ready && st.phase == Phase::Ready) else {
+                        self.dialog = Dialog::None;
+                        return;
+                    };
+                    let key = st.boot_first.unwrap_or("PLAY");
+                    let fw = st.file(FileKind::Firmware).unwrap_or_default();
+                    ("INSTALL IN TWO STEPS", vec![
+                        ("This unit has M-VAVE's stock bootloader: if the new firmware does not start, only a USB_KEY \
+                          dongle reaches download mode. m-bootloader goes first.".into(), INK),
+                        (format!("1 · m-bootloader {} · the boot area only, 0x00000-0x03FFF (16 KiB). Then REC while \
+                                  switching on: download mode; {key}: the recovery menu.", st.open_version), MINT),
+                        (format!("2 · {} · {} sectors ({} KiB): {}. Its review opens when step 1 is written.",
+                                 fw.trim_end_matches(".fwsc"), plan.count, plan.count * 4, plan.short), INK),
+                        ("Each step is reviewed, backed up first and verified, as any write.".into(), DIM),
+                    ], vec![("CANCEL", 0), ("SKIP M-BOOTLOADER", 10), ("INSTALL STEP 1", 11)])
+                }
+                Dialog::Delete(_, ref name, ref versions) => ("DELETE FROM THIS COMPUTER?", vec![
+                    (format!("Deletes the downloaded {name} ({versions}) from this computer."), INK),
+                    ("The unit is not touched. GET downloads it again, with its SHA-256 checked.".into(), DIM),
+                ], vec![("CANCEL", 0), ("DELETE", 9)]),
                 Dialog::About => ("ABOUT", vec![
                     (format!("M-Flasher {}: back up, restore and reinstall the firmware of the M-VAVE FM-1 and SMK-37 \
                               Pro / Elite through the chip's USB download mode, and install m-bootloader.",
@@ -746,7 +1086,7 @@ impl App {
         let mut x = 1116.0;
         for (label, code) in keys.iter().rev() {
             // the key we recommend: lit
-            let primary = matches!(code, 2 | 5);
+            let primary = matches!(code, 2 | 5 | 11);
             let w = if primary { 254.0 } else { (p.measure(label, "cond", 22.0, 1.6) + 48.0).max(150.0) };
             x -= w;
             let r = board.r(x, top + h - 78.0, w, 52.0);
@@ -769,15 +1109,31 @@ impl App {
                         6 => {
                             ctl.answer_boot_suggestion(false);
                         }
+                        9 => {
+                            if let Dialog::Delete(id, _, _) = &self.dialog {
+                                ctl.library_delete(id.clone());
+                            }
+                        }
+                        12 => ctl.cancel_install_wait(),
+                        // m-bootloader, then the firmware: reviewed as installing it (opens once planned)
+                        11 => {
+                            ctl.bootloader_then_firmware();
+                            self.review_when_planned = true;
+                        }
+                        // step 1's review given up: the firmware stays chosen
+                        0 if st.firmware_after => ctl.cancel_two_step(),
                         _ => {}
                     }
-                    self.dialog = Dialog::None;
+                    // SKIP M-BOOTLOADER: straight to the firmware's review
+                    self.dialog = if *code == 10 { Dialog::Review } else { Dialog::None };
                 }
             }
             x -= 16.0;
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) && st.alert.is_none() {
-            if self.dialog == Dialog::None && st.suggest_boot.is_some() {
+            if st.how_to.is_some() {
+                ctl.cancel_install_wait();
+            } else if self.dialog == Dialog::None && st.suggest_boot.is_some() {
                 ctl.answer_boot_suggestion(false);
             }
             self.dialog = Dialog::None;
@@ -994,6 +1350,51 @@ fn checkbox(ui: &egui::Ui, p: &Painter, x: f32, y: f32, text: &str, on: bool, en
     let w = p.text(x + 34.0, y, Align2::LEFT_CENTER, text, "tech", 16.0, INK, 0.4);
     let resp = ui.interact(b.r(x, y - 12.0, 34.0 + w, 24.0), ui.id().with(text), Sense::click());
     enabled && resp.clicked()
+}
+
+/// A five-pointed star of outer radius r, centred at (x, y): filled, or its outline.
+fn draw_star(p: &Painter, x: f32, y: f32, r: f32, filled: bool, color: Color32) {
+    let b = p.b;
+    let pts: Vec<Pos2> = (0..10).map(|k| {
+        let a = std::f32::consts::PI * (k as f32 / 5.0) - std::f32::consts::FRAC_PI_2;
+        let rr = if k % 2 == 0 { r } else { r * 0.45 };
+        b.p(x + rr * a.cos(), y + rr * a.sin())
+    }).collect();
+    if filled {
+        // a fan from the centre: the star is star-shaped around it
+        let mut m = Mesh::default();
+        let c = m.vertices.len() as u32;
+        m.colored_vertex(b.p(x, y), color);
+        for q in &pts {
+            m.colored_vertex(*q, color);
+        }
+        for k in 0..10u32 {
+            m.add_triangle(c, c + 1 + k, c + 1 + (k + 1) % 10);
+        }
+        p.p.add(Shape::mesh(m));
+    } else {
+        p.p.add(Shape::closed_line(pts, Stroke::new(1.6 * b.s, color)));
+    }
+}
+
+/// Material Design's "delete" (trash can) icon, outlined, centred at (x, y).
+fn draw_trash(p: &Painter, x: f32, y: f32, color: Color32) {
+    let b = p.b;
+    let st = Stroke::new(1.8 * b.s, color);
+    p.p.line_segment([b.p(x - 8.0, y - 6.0), b.p(x + 8.0, y - 6.0)], st);
+    p.p.line_segment([b.p(x - 3.0, y - 6.0), b.p(x - 3.0, y - 9.0)], st);
+    p.p.line_segment([b.p(x - 3.0, y - 9.0), b.p(x + 3.0, y - 9.0)], st);
+    p.p.line_segment([b.p(x + 3.0, y - 9.0), b.p(x + 3.0, y - 6.0)], st);
+    p.p.add(Shape::line(vec![b.p(x - 6.0, y - 6.0), b.p(x - 5.0, y + 9.0), b.p(x + 5.0, y + 9.0), b.p(x + 6.0, y - 6.0)], st));
+    p.p.line_segment([b.p(x - 2.0, y - 2.0), b.p(x - 2.0, y + 5.0)], st);
+    p.p.line_segment([b.p(x + 2.0, y - 2.0), b.p(x + 2.0, y + 5.0)], st);
+}
+
+/// A magnifier for the search field, centred at (x, y).
+fn draw_search(p: &Painter, x: f32, y: f32, color: Color32) {
+    let b = p.b;
+    p.p.circle_stroke(b.p(x - 2.0, y - 2.0), 6.0 * b.s, Stroke::new(2.0 * b.s, color));
+    p.p.line_segment([b.p(x + 2.5, y + 2.5), b.p(x + 7.0, y + 7.0)], Stroke::new(2.2 * b.s, color));
 }
 
 fn hatch(p: &Painter, r: Rect, strength: f32) {

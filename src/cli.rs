@@ -5,7 +5,10 @@
 //!           firmware PACKAGE.fwsc
 //!           bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot]
 //!           run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT]
-//! options:  --device PATH  --board fm1|smk37  --backup-dir DIR  --yes
+//!           library sync | list [--chip old|new] [--kind KIND] [--beta] | get ID | import-stock DIR
+//!           library install ID [--skip-bootloader | --stock-bootloader]
+//!           midi-ports
+//! options:  --device PATH  --board fm1|smk37  --backup-dir DIR  --yes  --port NAME
 //!           --restart (restore, firmware, bootloader: start the unit afterwards)
 //! ```
 
@@ -18,8 +21,12 @@ use std::path::PathBuf;
 const USAGE: &str = "usage: m-flasher [find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin [--keep-bootloader] |
                  firmware PACKAGE.fwsc |
                  bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot] |
-                 run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT]]
+                 run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT] |
+                 library sync | list [--chip old|new] [--kind KIND] [--beta] | get ID | import-stock DIR |
+                 library install ID [--skip-bootloader | --stock-bootloader] | midi-ports]
        options: --device PATH  --board fm1|smk37  --backup-dir DIR  --yes
+                --port NAME (find, download-mode: a MIDI port named otherwise taken for a unit;
+                             MFLASHER_MIDI_PORTS=NAME,... does the same, for the window too)
                 --restart (restore, firmware, bootloader: start the unit when written)
        without arguments: the window (`m-flasher run-ram --help`: the run-ram command)";
 
@@ -60,7 +67,7 @@ pub fn default_backup_dir() -> PathBuf {
 
 /// The home folder of the user who ran sudo, when running as root under it.
 #[cfg(unix)]
-fn sudo_user_home() -> Option<PathBuf> {
+pub(crate) fn sudo_user_home() -> Option<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     let user = std::ffi::CString::new(std::env::var("SUDO_USER").ok()?).ok()?;
     // SAFETY: getpwnam with a valid C string; the entry is read at once, before
@@ -272,9 +279,14 @@ pub fn run(args: Vec<String>) -> i32 {
 }
 
 fn main(args: Vec<String>) -> Result<(), Error> {
+    // the firmware library needs no unit: its own options, its own help
+    if args.first().map(String::as_str) == Some("library") && args.get(1).map(String::as_str) != Some("install") {
+        return crate::library::cli(&args[1..]).map_err(Error::Refused);
+    }
     let (mut pos, mut device, mut board, mut backup_dir, mut yes) = (vec![], None, None, default_backup_dir(), false);
     let (mut stock, mut file, mut then_restart) = (None, None, false);
     let mut keep_boot = false;
+    let mut install_opts = crate::library::InstallOptions::default();
     let (mut ram_addr, mut calls, mut read_spec, mut output) = (None, vec![], None, None);
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
@@ -282,6 +294,7 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         match a.as_str() {
             "--device" => device = Some(val("--device")?),
             "--board" => board = Some(val("--board")?),
+            "--port" => crate::midi::add_port_names(&val("--port")?),
             "--backup-dir" => backup_dir = PathBuf::from(val("--backup-dir")?),
             "--stock" => stock = Some(val("--stock")?),
             "--file" => file = Some(val("--file")?),
@@ -302,6 +315,8 @@ fn main(args: Vec<String>) -> Result<(), Error> {
                     .into()));
             }
             "--keep-bootloader" => keep_boot = true,
+            "--skip-bootloader" => install_opts.skip_bootloader = true,
+            "--stock-bootloader" => install_opts.stock_bootloader = true,
             "--restart" => then_restart = true,
             "--version" => {
                 println!("{}", env!("CARGO_PKG_VERSION"));
@@ -317,11 +332,28 @@ fn main(args: Vec<String>) -> Result<(), Error> {
     }
     let cmd = pos.first().cloned().unwrap_or_default();
     // before any command runs, find and download-mode too
-    if then_restart && !matches!(cmd.as_str(), "restore" | "firmware" | "bootloader") {
-        return Err(Error::Refused(format!("--restart is for restore, firmware and bootloader\n{USAGE}")));
+    if then_restart && !matches!(cmd.as_str(), "restore" | "firmware" | "bootloader" | "library") {
+        return Err(Error::Refused(format!("--restart is for restore, firmware, bootloader and library install\n{USAGE}")));
+    }
+    if (install_opts.skip_bootloader || install_opts.stock_bootloader) && cmd != "library" {
+        return Err(Error::Refused(format!("--skip-bootloader and --stock-bootloader are for library install\n{USAGE}")));
+    }
+    if install_opts.skip_bootloader && install_opts.stock_bootloader {
+        return Err(Error::Refused("--skip-bootloader and --stock-bootloader: choose one".into()));
     }
     if keep_boot && cmd != "restore" {
         return Err(Error::Refused(format!("--keep-bootloader is for restore\n{USAGE}")));
+    }
+    if cmd == "midi-ports" {
+        let ports = crate::midi::port_names();
+        if ports.is_empty() {
+            println!("No MIDI output ports.");
+        }
+        for (name, unit) in ports {
+            println!("{}\t{name}", if unit { "unit" } else { "-" });
+        }
+        println!("A unit whose port has another name: --port NAME (or MFLASHER_MIDI_PORTS=NAME for the window).");
+        return Ok(());
     }
     if cmd == "find" {
         for (p, d) in find_devices() {
@@ -349,7 +381,7 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         println!("Connecting to {path}");
         return restart(&path);
     }
-    if !matches!(cmd.as_str(), "info" | "backup" | "restore" | "firmware" | "bootloader" | "run-ram") {
+    if !matches!(cmd.as_str(), "info" | "backup" | "restore" | "firmware" | "bootloader" | "run-ram" | "library") {
         return Err(Error::Refused(USAGE.into()));
     }
     if cmd != "run-ram" && (ram_addr.is_some() || !calls.is_empty() || read_spec.is_some() || output.is_some()) {
@@ -359,6 +391,16 @@ fn main(args: Vec<String>) -> Result<(), Error> {
     let ram = if cmd == "run-ram" {
         let file = pos.get(1).ok_or_else(|| Error::Refused(RUN_RAM_HELP.into()))?;
         Some(RamJob::new(&read(file)?, ram_addr.as_deref(), &calls, read_spec.as_deref(), output.as_deref())?)
+    } else {
+        None
+    };
+    // library install: the package is found and checked before the unit is touched
+    let install = if cmd == "library" {
+        let id = pos.get(2).ok_or_else(|| Error::Refused(format!("library install needs a firmware's id (see `library list`)\n{USAGE}")))?;
+        let lib = crate::library::Library::new(crate::library::default_dir());
+        let inst = lib.installable(id, &crate::library::Http::new()).map_err(Error::Refused)?;
+        println!("Package: {} {} [{}] ({}), checked", inst.name, inst.version, inst.id, inst.credit);
+        Some(inst)
     } else {
         None
     };
@@ -384,6 +426,34 @@ fn main(args: Vec<String>) -> Result<(), Error> {
     }
     for (_, strong, t) in &s.analysis.evidence {
         println!("    {} {t}", if *strong { "*" } else { "-" });
+    }
+    if install.is_none() && cmd != "bootloader" && s.bootloader_suggestion().is_some() {
+        println!("Recommended: this unit has M-VAVE's stock bootloader. `m-flasher bootloader` installs m-bootloader, \
+                  so that a firmware that fails to start can be reflashed from the unit's keys.");
+    }
+    if let Some(inst) = install {
+        let chip = crate::library::unit_chip(crate::jl::Flash::flash_id(&s.dev));
+        if !inst.fits_chip(chip) {
+            return Err(Error::Refused(format!("{} is marked for the FM-1's older flash chip (0x856014) only; this unit has \
+                                               the newer one", inst.name)));
+        }
+        if let Some((plan, why)) = crate::library::bootloader_step(&s, &inst, &install_opts)? {
+            println!("\nStep 1 of 2: the bootloader. {why}");
+            if !confirm_and_apply(&mut s, &plan, yes)? {
+                println!("Step 1 skipped: the unit keeps its bootloader.");
+            }
+            println!("\nStep 2 of 2: the firmware.");
+        }
+        let plan = s.plan_firmware(&inst.data)?;
+        let written = confirm_and_apply(&mut s, &plan, yes)?;
+        if let Some(note) = crate::library::after_install_note(&s, &install_opts) {
+            println!("{note}");
+        }
+        if written && then_restart {
+            drop(s);
+            return restart(&path);
+        }
+        return Ok(());
     }
     let plan = match cmd.as_str() {
         "info" => return Ok(()),
