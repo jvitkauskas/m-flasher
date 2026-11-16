@@ -148,6 +148,26 @@ instead, or install the firmware and then put back the stock bootloader.
 Backups go to `Documents/M-Flasher/backups` in your home folder; the
 **Backups** link at the top of the window opens it.
 
+## The firmware library
+
+The LIBRARY tab lists the community firmwares of
+[The Firmware Hub](https://thefirmwarehub.com) (read at most once a day,
+CC BY 4.0). **This unit only** hides what can't go on the connected unit: a
+firmware marked for the older flash chip, or one that installs only with its
+author's own tool. **GET** downloads a firmware from its author's release and
+checks its SHA-256; it is kept in M-Flasher's folder (`M-Flasher/library`, or
+`MFLASHER_LIBRARY_DIR`) for later, also offline. **INSTALL** chooses it and
+plans it, and its review opens: nothing is written before **WRITE**.
+
+With no unit in download mode, INSTALL first switches a running one by the
+soft key; if its firmware does not know it, the app says which keys do it on
+that unit and carries on when it shows up. A unit with M-VAVE's stock
+bootloader gets m-bootloader first ([Safety](safety.md), REQ-BOOT-01). After
+a write the unit is restarted, and the app waits for it on USB MIDI.
+
+On the command line: `m-flasher library sync | list | get ID | install ID`
+(`--skip-bootloader` installs without m-bootloader first).
+
 ## The flash map
 
 The unit's 1 MiB flash is drawn as its 256 sectors of 4 KiB, coloured by what

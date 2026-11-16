@@ -64,7 +64,7 @@ enum Dialog {
     None,
     /// Library: delete a firmware's downloads (id, name, versions), asked first.
     Delete(String, String, String),
-    /// Firmware on a unit with the stock bootloader: m-bootloader first (Figma screen 03).
+    /// Firmware on a unit with the stock bootloader: m-bootloader first.
     TwoStep,
     Review,
     About,
@@ -227,7 +227,7 @@ impl eframe::App for App {
         if clicked("backups", board.r(1420.0 - aw - 34.0 - bw, 68.0, bw, 24.0)).0 && !modal {
             self.ctl.open_backups();
         }
-        // the tabs (Figma 13hgI2LSoYUAyRWRptssIz, screens 01 and 02), left of BACKUPS
+        // the tabs, left of BACKUPS
         let tabs = [(Tab::Device, "DEVICE"), (Tab::Library, "LIBRARY")];
         let tabs_w: f32 = tabs.iter().map(|(_, n)| p.measure(n, "tech", 17.0, 2.0)).sum::<f32>() + 30.0;
         let mut tx = 1420.0 - aw - 34.0 - bw - 56.0 - tabs_w;

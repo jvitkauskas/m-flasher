@@ -30,6 +30,17 @@ backup can repair.
 - A choice changed after the plan was made is planned again before anything
   is written.
 
+**m-bootloader before a firmware (REQ-BOOT-01)**
+
+- On a unit with M-VAVE's stock bootloader, a firmware that does not start
+  can only be reached again with a USB_KEY dongle. Installing a firmware there
+  (from a file or the library) is offered in two steps: m-bootloader first,
+  then the firmware. Each step is reviewed, backed up first and verified, as
+  any write; after step 1, holding REC (SMK-37: SEQ REC) while switching on
+  always reaches download mode.
+- Step 1 can be skipped; the review then says the unit keeps no way back from
+  its keys.
+
 **While writing**
 
 - Only the 4 KiB sectors that change are written, and only inside the area

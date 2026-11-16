@@ -1580,7 +1580,7 @@ mod library_install {
         assert_eq!(unit_chip(0xEB6014), None, "the SMK-37's");
         let old_only = inst(vec![], false, "old");
         assert!(old_only.fits_chip(Some("old")) && !old_only.fits_chip(Some("new")));
-        assert!(inst(vec![], false, "new").fits_chip(Some("old")), "until the hub says otherwise (PRD Q2)");
+        assert!(inst(vec![], false, "new").fits_chip(Some("old")), "until the hub says otherwise");
     }
 }
 

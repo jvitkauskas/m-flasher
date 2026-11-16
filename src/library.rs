@@ -276,11 +276,11 @@ pub fn default_dir() -> PathBuf {
     #[cfg(all(unix, not(target_os = "android")))]
     let home = crate::cli::sudo_user_home().unwrap_or(home);
     if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/M-Flasher Library")
+        home.join("Library/Application Support/M-Flasher/library")
     } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or(home).join("M-Flasher Library")
+        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or(home).join("M-Flasher").join("library")
     } else {
-        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("m-flasher-library")
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("m-flasher/library")
     }
 }
 

@@ -24,6 +24,11 @@ the unit is broken. For Windows, macOS and Linux.
 - **Back up** the whole flash, and **restore** a backup.
 - **Install firmware** from M-VAVE's `.fwsc` packages, as downloaded.
 - **Install m-bootloader**, or put the stock one back.
+- A **firmware library**: the community firmwares listed by
+  [The Firmware Hub](https://thefirmwarehub.com), downloaded from their
+  authors' releases and checked by SHA-256, installed with a review like any
+  other write. A unit with M-VAVE's stock bootloader gets m-bootloader first
+  (REQ-BOOT-01).
 - A **flash map** shows what each part of the flash holds and, before a
   write, exactly what will change.
 - Checks the package is for this model, writes only what changes, and
