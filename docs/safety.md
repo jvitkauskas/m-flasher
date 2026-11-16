@@ -41,6 +41,8 @@ backup can repair.
 - Step 1 can be skipped; the review then says the unit keeps no way back from
   its keys.
 
+![REQ-BOOT-01: install a firmware, check the unit, then by its bootloader: the original one gets m-bootloader first in two steps, m-bootloader goes straight to the firmware; then the firmware is written and the unit restarts](img/req-boot-01-flow.png)
+
 **While writing**
 
 - Only the 4 KiB sectors that change are written, and only inside the area
