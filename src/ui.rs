@@ -69,6 +69,8 @@ enum Dialog {
     Review,
     About,
     Model,
+    /// RESTORE's FROM BACKUPS: the latest backups of this computer.
+    Backups,
 }
 
 pub struct App {
@@ -92,6 +94,8 @@ pub struct App {
     lib_query: String,
     /// Library: only the starred firmwares.
     lib_favorites: bool,
+    /// The operation chosen on the checked unit (its form shows): none until one is.
+    op_open: Option<Mode>,
 }
 
 /// Where donations for code signing go (the About dialog).
@@ -114,18 +118,19 @@ impl App {
             ctl.load_library();
         }
         App { ctl, dialog, noise: None, nudged: f64::NEG_INFINITY, review_when_planned: false, fonts, tab,
-              lib_compatible: true, lib_beta: true, lib_first: 0, lib_scroll: 0.0, lib_query: String::new(), lib_favorites: false }
+              lib_compatible: true, lib_beta: true, lib_first: 0, lib_scroll: 0.0, lib_query: String::new(), lib_favorites: false, op_open: None }
     }
 }
 
 /// The LCD's bottom line for the current state.
-fn prompt(s: &Shared) -> String {
+fn prompt(s: &Shared, chosen: bool) -> String {
     let n_done = s.marks.values().filter(|m| matches!(m, Mark::Written | Mark::Verified)).count();
     match (&s.device, s.phase) {
         (None, Phase::Connecting) => "DO NOT UNPLUG OR SWITCH OFF".into(),
         (None, _) if s.multiple => "CONNECT ONLY ONE UNIT".into(),
-        (None, _) if s.midi.is_some() => format!("{} RUNNING · PRESS DOWNLOAD MODE", s.midi.clone().unwrap_or_default().to_uppercase()),
-        (None, _) => "HOLD SEQ REC (SMK-37) OR REC (FM-1) WHILE SWITCHING ON".into(),
+        (None, _) if s.midi.is_some() => format!("{} RUNNING · PRESS CHECK FM1 STATUS",
+                                                 crate::controller::unit_name("", s.midi.as_deref().unwrap_or("")).to_uppercase()),
+        (None, _) => "CONNECT IT AND PRESS CHECK FM1 STATUS".into(),
         (Some(_), Phase::Working) if s.mode == Mode::Backup => "SAVING FULL BACKUP · 1 MiB".into(),
         (Some(_), Phase::Working) if s.stage[2] == Stage::Idle => "SAVING A BACKUP FIRST · DO NOT SWITCH OFF".into(),
         (Some(_), Phase::Working) => {
@@ -135,6 +140,9 @@ fn prompt(s: &Shared) -> String {
         }
         (Some(_), Phase::Done) if s.mode == Mode::Backup => format!("BACKUP SAVED · {}", s.backup_saved.clone().unwrap_or_default()),
         (Some(_), Phase::Done) => format!("DONE · {} SECTORS VERIFIED · SWITCH OFF AND ON", s.plan.as_ref().map(|p| p.count).unwrap_or(0)),
+        (Some(d), _) if !chosen && s.mode != Mode::Bootloader => {
+            if d.boot_open { "CHECKED · CHOOSE AN OPERATION".into() } else { "INSTALL M-BOOTLOADER FIRST: IT PROTECTS AGAINST BRICKS".into() }
+        }
         (Some(_), _) => match &s.plan {
             None => "CHOOSE AN OPERATION BELOW".into(),
             Some(p) => match p.kind {
@@ -184,11 +192,17 @@ impl eframe::App for App {
             self.review_when_planned = false;
         }
         if st.library_review && !st.busy && st.alert.is_none() && self.dialog == Dialog::None {
-            // library INSTALL planned: its review, or the two steps first (REQ-BOOT-01), as REVIEW & FLASH
+            // library INSTALL planned: its review opens right away, over the LIBRARY tab (or the two steps
+            // first, REQ-BOOT-01); the Device tab's firmware form shows the same choice
             self.ctl.clear_library_review();
+            self.op_open = Some(Mode::Firmware);
             if st.mode == Mode::Firmware && st.phase == Phase::Ready && st.plan.as_ref().is_some_and(|p| p.ready) {
                 self.dialog = if st.boot_first.is_some() { Dialog::TwoStep } else { Dialog::Review };
             }
+        }
+        if dev.is_none() {
+            // no unit checked: no operation chosen
+            self.op_open = None;
         }
         if st.review_next && !st.busy && st.alert.is_none() && self.dialog == Dialog::None {
             // step 1 of 2 written: the firmware's review, as any write
@@ -214,7 +228,7 @@ impl eframe::App for App {
 
         // ---- masthead ----
         let origin = board.p(40.0, 116.0);
-        let ww = crate::wordmark::draw(&painter, origin.x, origin.y, 72.0 * s, MINT) / s;
+        let ww = crate::wordmark::draw(&painter, origin.x, origin.y, 64.0 * s, MINT) / s;
         p.text(38.0 + ww + 24.0, 70.0, Align2::LEFT_CENTER, "USB FIRMWARE UTILITY", "tech", 21.0, LAV, 2.4);
         p.text(38.0 + ww + 24.0, 96.0, Align2::LEFT_CENTER, "FOR THE FM-1 AND SMK-37", "tech", 14.0, hex(0x8f80b6), 3.0);
         p.text(1500.0, 80.0, Align2::RIGHT_CENTER, &format!("v{}", env!("CARGO_PKG_VERSION")), "tech", 14.0, LAV, 1.0);
@@ -274,7 +288,7 @@ impl eframe::App for App {
         p.text_fit(372.0, 254.0, &l2, "lcd", 30.0, 470.0, LCDINK, 1.5);
         p.hline(372.0, 845.0, 272.0, LCDINK);
         p.text(372.0, 293.0, Align2::LEFT_CENTER, &l3, "lcd", 30.0, LCDINK, 1.5);
-        let line = prompt(&st);
+        let line = prompt(&st, self.op_open.is_some());
         let alert_ink = st.plan.as_ref().is_some_and(|p| p.kind == PlanKind::Refused);
         let mut ink = if alert_ink { hex(0x5b1206) } else { LCDINK };
         // after an inactive key: the line shakes, and flashes inverted three times
@@ -296,250 +310,190 @@ impl eframe::App for App {
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
         if self.tab == Tab::Device {
-        // ---- device info ----
-        p.label(38.0, 388.0, "DEVICE INFO", Some(891.0));
-        let dash = "–".to_string();
-        let rows: [[(&str, String, Color32); 2]; 3] = match dev {
-            Some(d) => [
-                [("MODEL", d.model.to_uppercase(), if d.certain { INK } else { WARN }), ("BOOTLOADER", d.bootloader.clone(), INK)],
-                [("FIRMWARE", d.firmware.clone(), INK), ("FLASH CHIP", format!("{} · 1 MiB", d.flash), INK)],
-                [("FIRMWARE CHECK", d.app.clone(), if d.app_ok { MINT } else { BAD }), ("CHIP KEY", d.chip_key.clone(), if d.chip_key_ok { INK } else { WARN })],
-            ],
-            None => [
-                [("MODEL", dash.clone(), INK), ("BOOTLOADER", dash.clone(), INK)],
-                [("FIRMWARE", dash.clone(), INK), ("FLASH CHIP", dash.clone(), INK)],
-                [("FIRMWARE CHECK", dash.clone(), INK), ("CHIP KEY", dash.clone(), INK)],
-            ],
-        };
+        // ---- check and protect (Figma: Device scenarios): the unit is checked before anything else ----
+        let half = (853.0 - 14.0) / 2.0;
+        let checking = st.phase == Phase::Connecting || (busy && dev.is_none());
+        let cr = board.r(38.0, 384.0, half, 62.0);
+        let (cc, ch) = clicked("check", cr);
+        key(&p, cr, dev.is_none() && !checking, ch && active, !active);
+        draw_icon(&p, Icon::Chip, 60.0, 399.0, 32.0, KEYINK);
+        p.text(110.0, 415.0, Align2::LEFT_CENTER, if checking { "CHECKING…" } else { "CHECK FM1 STATUS" }, "cond", 24.0, KEYINK, 2.0);
+        led(&p, board.p(38.0 + half - 20.0, 400.0), dev.is_none() && !checking);
+        if cc && active {
+            self.ctl.check();
+        } else if cc && !modal {
+            self.nudged = now;
+        }
+        let open = dev.is_some_and(|d| d.boot_open);
+        let bx = 38.0 + half + 14.0;
+        let br = board.r(bx, 384.0, half, 62.0);
+        let (bc, bh) = clicked("installboot", br);
+        let can_boot = active && dev.is_some() && !open;
+        key(&p, br, dev.is_some() && !open, bh && can_boot, !can_boot);
+        draw_icon(&p, Icon::Boot, bx + 22.0, 399.0, 32.0, KEYINK);
+        if open {
+            // "m-bootloader 2.4-395e6cc": its version
+            let v = dev.map(|d| d.bootloader.split_whitespace().nth(1).unwrap_or("").split('-').next().unwrap_or("").to_string())
+                .unwrap_or_default();
+            p.text(bx + 72.0, 404.0, Align2::LEFT_CENTER, &format!("M-BOOTLOADER {v}"), "cond", 21.0, KEYINK, 1.6);
+            p.text(bx + 72.0, 426.0, Align2::LEFT_CENTER, "INSTALLED ✓", "cond", 21.0, KEYINK, 1.6);
+        } else {
+            p.text(bx + 72.0, 415.0, Align2::LEFT_CENTER, "INSTALL M-BOOTLOADER", "cond", 24.0, KEYINK, 2.0);
+        }
+        led(&p, board.p(bx + half - 20.0, 400.0), dev.is_some() && !open);
+        if bc && can_boot {
+            // reviewed as any write once planned
+            self.op_open = None;
+            self.review_when_planned = self.ctl.answer_boot_suggestion(true);
+        } else if bc && !modal {
+            self.nudged = now;
+        }
+        if dev.is_some() && !open {
+            p.p.add(Shape::convex_polygon(vec![board.p(47.5, 459.0), board.p(55.0, 472.0), board.p(40.0, 472.0)], WARN, Stroke::NONE));
+            p.text(47.5, 467.5, Align2::CENTER_CENTER, "!", "tech", 11.0, hex(0x1a1410), 0.0);
+            let lw = p.text(66.0, 466.0, Align2::LEFT_CENTER, "SAFETY CHECK", "tech", 13.0, LAV, 1.6);
+            p.text(66.0 + lw + 14.0, 466.0, Align2::LEFT_CENTER, "You don't have m-bootloader · It's a safeguard to prevent bricks",
+                   "plex", 15.0, WARN, 0.0);
+        }
+
+        if let Some(d) = dev {
+        // ---- device info: once checked ----
+        p.label(38.0, 492.0, "DEVICE INFO", Some(891.0));
+        let rows: [[(&str, String, Color32); 2]; 3] = [
+            [("MODEL", d.model.to_uppercase(), if d.certain { INK } else { WARN }), ("BOOTLOADER", d.bootloader.clone(), if d.boot_open { INK } else { WARN })],
+            [("FIRMWARE", d.firmware.clone(), INK), ("FLASH CHIP", d.flash_label.clone(), INK)],
+            [("FIRMWARE CHECK", d.app.clone(), if d.app_ok { MINT } else { BAD }), ("CHIP KEY", d.chip_key.clone(), if d.chip_key_ok { INK } else { WARN })],
+        ];
         for (i, row) in rows.iter().enumerate() {
-            let y = 413.0 + i as f32 * 29.0;
+            let y = 517.0 + i as f32 * 29.0;
             for (j, (k, v, c)) in row.iter().enumerate() {
                 let x = if j == 0 { 38.0 } else { 484.0 };
                 p.text(x + 10.0, y, Align2::LEFT_CENTER, k, "tech", 14.0, LAV, 1.6);
-                p.text_fit(x + 160.0, y, v, "plex", 15.0, 240.0, *c, 0.0);
+                p.text_fit(x + 160.0, y, v, "plex", 15.0, 245.0, *c, 0.0);
                 p.hline(x, x + 407.0, y + 14.5, hex(0x3c3433));
             }
         }
-        p.vline(465.0, 402.0, 484.0, LAVLINE);
-        if let Some(d) = dev {
-            if !d.certain {
-                let r = board.r(48.0, 400.0, 400.0, 26.0);
-                let (c, h) = clicked("model", r);
-                if h && active {
-                    painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(s, WARN), StrokeKind::Inside);
-                }
-                p.text(440.0, 413.0, Align2::RIGHT_CENTER, "CHOOSE ▸", "tech", 12.0, WARN, 1.0);
-                if c && active {
-                    self.dialog = Dialog::Model;
-                }
+        p.vline(465.0, 506.0, 588.0, LAVLINE);
+        if !d.certain {
+            let r = board.r(48.0, 504.0, 400.0, 26.0);
+            let (c, h) = clicked("model", r);
+            if h && active {
+                painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(s, WARN), StrokeKind::Inside);
+            }
+            p.text(440.0, 517.0, Align2::RIGHT_CENTER, "CHOOSE ▸", "tech", 12.0, WARN, 1.0);
+            if c && active {
+                self.dialog = Dialog::Model;
             }
         }
 
-        // ---- operation keys ----
-        p.label(38.0, 510.0, "OPERATIONS", Some(891.0));
+        // ---- operations: backup saves at once; restore and firmware open their form ----
+        p.label(38.0, 612.0, "OPERATIONS", Some(891.0));
         let keys = [
             (Mode::Backup, "BACKUP", "FULL FLASH", Icon::Backup),
             (Mode::Restore, "RESTORE", "FULL FLASH", Icon::Restore),
             (Mode::Firmware, "FLASH", "FIRMWARE", Icon::Chip),
-            (Mode::Bootloader, "FLASH", "BOOTLOADER", Icon::Boot),
         ];
-        let kw = (853.0 - 3.0 * 14.0) / 4.0;
+        let kw = (853.0 - 2.0 * 14.0) / 3.0;
         for (i, (mode, t1, t2, icon)) in keys.iter().enumerate() {
             let x = 38.0 + i as f32 * (kw + 14.0);
-            let r = board.r(x, 524.0, kw, 72.0);
+            let r = board.r(x, 626.0, kw, 72.0);
             let (c, h) = clicked(&format!("op{i}"), r); // ids must be unique: two keys say FULL FLASH
-            let on = dev.is_some() && st.mode == *mode;
-            let enabled = dev.is_some() && active;
-            key(&p, r, on, h && enabled, !enabled && !on);
-            draw_icon(&p, *icon, x + 22.0, 543.0, 34.0, KEYINK);
-            p.text(x + 70.0, 549.0, Align2::LEFT_CENTER, t1, "cond", 21.0, KEYINK, 1.6);
-            p.text(x + 70.0, 571.0, Align2::LEFT_CENTER, t2, "cond", 21.0, KEYINK, 1.6);
-            led(&p, board.p(x + kw - 18.0, 542.0), on);
-            if c && enabled {
-                self.ctl.select_mode(*mode);
+            let on = self.op_open == Some(*mode);
+            key(&p, r, on, h && active, !active && !on);
+            draw_icon(&p, *icon, x + 22.0, 645.0, 34.0, KEYINK);
+            p.text(x + 70.0, 651.0, Align2::LEFT_CENTER, t1, "cond", 21.0, KEYINK, 1.6);
+            p.text(x + 70.0, 673.0, Align2::LEFT_CENTER, t2, "cond", 21.0, KEYINK, 1.6);
+            led(&p, board.p(x + kw - 18.0, 644.0), on);
+            if c && active {
+                self.op_open = Some(*mode);
+                if *mode == Mode::Backup {
+                    self.ctl.save_backup();
+                } else {
+                    self.ctl.select_mode(*mode);
+                }
             } else if c && !modal {
                 self.nudged = now;
             }
         }
 
-        // ---- operation panel ----
-        let title = match (dev, st.mode) {
-            (None, _) => "HOW TO CONNECT",
-            (_, Mode::Backup) => "BACKUP DESTINATION",
-            (_, Mode::Restore) => "BACKUP FILE",
-            (_, Mode::Firmware) => "FIRMWARE FILE",
-            (_, Mode::Bootloader) => "BOOTLOADER SOURCE",
+        // ---- the chosen operation's form ----
+        let form = match self.op_open {
+            Some(Mode::Firmware) if st.mode == Mode::Firmware => Some(Mode::Firmware),
+            Some(Mode::Restore) if st.mode == Mode::Restore => Some(Mode::Restore),
+            _ => None,
         };
-        p.label(38.0, 630.0, title, Some(891.0));
-        p.frame(board.r(38.0, 640.0, 853.0, 146.0), LAVLINE, 1.0);
-        let file_row = |p: &Painter, label: &str, value: Option<String>, button: &str, id: &str| -> bool {
-            p.text(56.0, 674.0, Align2::LEFT_CENTER, label, "tech", 14.0, LAV, 1.5);
-            let field = board.r(200.0, 655.0, 514.0, 38.0);
+        if let Some(mode) = form {
+            let fw = mode == Mode::Firmware;
+            p.label(38.0, 724.0, if fw { "FIRMWARE FILE" } else { "BACKUP TO RESTORE" }, Some(891.0));
+            let cb = board.r(38.0, 738.0, 170.0, 38.0);
+            let (c, h) = clicked("choose", cb);
+            key(&p, cb, false, h && active, !active);
+            p.text(123.0, 757.0, Align2::CENTER_CENTER, if fw { "CHOOSE FILE" } else { "CHOOSE BACKUP" }, "cond", 18.0, KEYINK, 1.6);
+            if c && active {
+                self.ctl.choose_file(if fw { FileKind::Firmware } else { FileKind::Restore });
+            }
+            let field = board.r(222.0, 738.0, 669.0, 38.0);
             p.rect(field, hex(0x1d1917));
             p.frame(field, hex(0x5a5060), 1.0);
+            let value = if fw {
+                match (&st.library_choice, st.file(FileKind::Firmware)) {
+                    (Some(n), Some(_)) => Some(format!("{n} · from the library · SHA-256 OK")),
+                    (_, f) => f,
+                }
+            } else {
+                st.file(FileKind::Restore).map(|n| match st.backups.iter().find(|b| b.name == n) {
+                    Some(b) => format!("{n} · {} · {}", b.time, b.firmware),
+                    None => n,
+                })
+            };
             let (txt, col) = match value { Some(v) => (v, INK), None => ("no file chosen".into(), hex(0x5c534d)) };
-            p.text_fit(214.0, 674.0, &txt, "plex", 17.0, 490.0, col, 0.0);
-            let br = board.r(728.0, 655.0, 146.0, 38.0);
-            let (c, h) = clicked(id, br);
-            key(p, br, false, h && active, !active);
-            p.text(801.0, 674.0, Align2::CENTER_CENTER, button, "cond", 18.0, KEYINK, 1.6);
-            c && active
-        };
-        let auto_line = match &st.backup_saved {
-            Some(n) => format!("AUTO BACKUP SAVED · {n}"),
-            None => "AUTO BACKUP BEFORE EVERY WRITE".into(),
-        };
-        match (dev, st.mode) {
-            (None, _) if st.midi.is_some() => {
-                let name = st.midi.clone().unwrap_or_default();
-                if file_row(&p, "USB MIDI", Some(format!("{name} · running")), "DOWNLOAD MODE", "softkey") {
-                    self.ctl.enter_download_mode();
+            p.text_fit(236.0, 757.0, &txt, "plex", 17.0, 640.0, col, 0.0);
+            // the write's review, OR the other source
+            let n = st.plan.as_ref().map(|p| p.count).unwrap_or(0);
+            let ready = st.plan.as_ref().is_some_and(|p| p.ready) && st.phase != Phase::Done;
+            let verb = if fw { "FLASH FIRMWARE" } else { "RESTORE BACKUP" };
+            let label = match st.phase {
+                Phase::Working => "WRITING…".to_string(),
+                _ if ready => format!("{verb} · REVIEW {n} SECTORS"),
+                _ if st.plan.as_ref().is_some_and(|p| p.kind == PlanKind::Write && p.count == 0) => "NOTHING TO WRITE".into(),
+                _ => verb.into(),
+            };
+            let pr = board.r(38.0, 790.0, 480.0, 48.0);
+            let (pc, ph) = clicked("primary", pr);
+            key(&p, pr, ready, ph && active && ready, !(active && ready));
+            p.text(278.0, 814.0, Align2::CENTER_CENTER, &label, "cond", 20.0, KEYINK, 1.6);
+            if pc && active && ready {
+                if fw && st.boot_first.is_some() {
+                    self.dialog = Dialog::TwoStep;
+                } else {
+                    self.dialog = Dialog::Review;
                 }
-                p.text(56.0, 720.0, Align2::LEFT_CENTER,
-                    "Restarts it into download mode with a MIDI message: no keys, whichever bootloader it has.",
-                    "tech", 15.0, DIM, 0.3);
-                p.text(56.0, 744.0, Align2::LEFT_CENTER,
-                    "Nothing is written. Switching it off and on leaves download mode.", "tech", 15.0, DIM, 0.3);
+            } else if pc && !modal {
+                self.nudged = now;
             }
-            (None, _) => {
-                let mut rows = vec![
-                    ("M-VAVE firmware or Felucca running", "connect it: DOWNLOAD MODE appears here"),
-                    ("SMK-37 with m-bootloader", "hold SEQ REC while switching on"),
-                    ("FM-1 with m-bootloader", "hold REC while switching on"),
-                    ("Felucca, SLOOP, Snoop37 running", "hold OCT- and OCT+ for 5 s"),
-                    ("Then", "connect USB: a data cable, no hub"),
-                ];
-                if cfg!(target_os = "macos") {
-                    rows.push(("Removable volume prompt", "choose Allow: that is the unit"));
-                }
-                let step = if rows.len() > 5 { 21.0 } else { 25.0 };
-                for (i, (a, b)) in rows.iter().enumerate() {
-                    let y = 662.0 + i as f32 * step;
-                    p.text(56.0, y, Align2::LEFT_CENTER, a, "tech", 15.5, LAV, 0.0);
-                    p.text(360.0, y, Align2::LEFT_CENTER, b, "tech", 15.5, INK, 0.0);
+            p.text(545.0, 814.0, Align2::CENTER_CENTER, "OR", "tech", 14.0, DIM, 1.6);
+            let sr = board.r(572.0, 790.0, 319.0, 48.0);
+            let (sc, sh) = clicked("othersource", sr);
+            key(&p, sr, false, sh && active, !active);
+            p.text(731.5, 814.0, Align2::CENTER_CENTER, if fw { "INSTALL FROM LIBRARY" } else { "FROM BACKUPS" }, "cond", 20.0, KEYINK, 1.6);
+            if sc && active {
+                if fw {
+                    self.tab = Tab::Library;
+                    self.ctl.load_library();
+                } else {
+                    self.dialog = Dialog::Backups;
                 }
             }
-            (_, Mode::Backup) => {
-                let dir = st.backup_dir.display().to_string();
-                if file_row(&p, "FOLDER", Some(dir), "OPEN FOLDER", "openfolder") {
-                    self.ctl.open_backups();
-                }
-                p.text(56.0, 720.0, Align2::LEFT_CENTER,
-                    "Saves the whole flash (1 MiB, read and checked when the unit connected) with a .json describing it.",
-                    "tech", 15.0, DIM, 0.3);
-                p.text(56.0, 744.0, Align2::LEFT_CENTER, "Nothing is written to the unit.", "tech", 15.0, DIM, 0.3);
-            }
-            (_, Mode::Restore) => {
-                if file_row(&p, "BACKUP FILE", st.file(FileKind::Restore), "CHOOSE FILE", "chooserestore") {
-                    self.ctl.choose_file(FileKind::Restore);
-                }
-                let chosen = st.file(FileKind::Restore);
-                for (i, b) in st.backups.iter().take(2).enumerate() {
-                    let y = 706.0 + i as f32 * 20.0;
-                    let r = board.r(50.0, y - 10.0, 820.0, 20.0);
-                    let (c, h) = clicked(&b.name, r);
-                    let sel = chosen.as_deref() == Some(b.name.as_str());
-                    if h && active {
-                        p.rect(r, hex(0x312a26));
-                    }
-                    if sel || (h && active) {
-                        p.rect(board.r(50.0, y - 10.0, 2.0, 20.0), MINT);
-                    }
-                    let col = if sel { MINT } else { INK };
-                    p.text(58.0, y, Align2::LEFT_CENTER, &b.name, "plex", 14.0, col, 0.0);
-                    p.text(370.0, y, Align2::LEFT_CENTER, &b.time, "plex", 14.0, DIM, 0.0);
-                    p.text_fit(530.0, y, &b.firmware, "plex", 14.0, 330.0, DIM, 0.0);
-                    if c && active {
-                        self.ctl.pick_backup(b.path.clone());
-                    }
-                }
-                if checkbox(ui, &p, 56.0, 748.0, "Keep this unit's bootloader (don't restore the boot area)", st.keep_boot, active) {
-                    self.ctl.set_keep_boot(!st.keep_boot);
-                }
-                p.text(56.0, 772.0, Align2::LEFT_CENTER, &auto_line, "tech", 13.5, LAV, 2.0);
-            }
-            (_, Mode::Firmware) => {
-                if file_row(&p, "FIRMWARE FILE", st.file(FileKind::Firmware), "CHOOSE FILE", "choosefw") {
-                    self.ctl.choose_file(FileKind::Firmware);
-                }
-                p.text(56.0, 743.0, Align2::LEFT_CENTER, "The unit's bootloader is kept. To change it, use FLASH BOOTLOADER.", "plex", 14.0, DIM, 0.0);
-                p.text(56.0, 772.0, Align2::LEFT_CENTER, &auto_line, "tech", 13.5, LAV, 2.0);
-            }
-            (_, Mode::Bootloader) => {
-                p.text(56.0, 674.0, Align2::LEFT_CENTER, "SOURCE", "tech", 14.0, LAV, 1.5);
-                let mut x = 200.0;
-                let opts = [
-                    (BootSource::Open, format!("M-BOOTLOADER {}", st.open_version).to_uppercase()),
-                    (BootSource::Stock, "STOCK (FROM .FWSC)".into()),
-                    (BootSource::File, "FILE (.BOOT)".into()),
-                ];
-                for (src, t) in opts.iter() {
-                    let w = t.len() as f32 * 9.5 + 36.0;
-                    let r = board.r(x, 655.0, w, 38.0);
-                    let (c, h) = clicked(t, r);
-                    key(&p, r, st.boot_source == *src, h && active, !active);
-                    p.text(x + w / 2.0, 674.0, Align2::CENTER_CENTER, t, "cond", 17.0, KEYINK, 1.4);
-                    if c && active {
-                        self.ctl.set_boot_source(*src);
-                    }
-                    x += w + 10.0;
-                }
-                match st.boot_source {
-                    BootSource::Open => {
-                        p.text(56.0, 722.0, Align2::LEFT_CENTER,
-                            &format!("The bundled m-bootloader {} for the identified model.", st.open_version), "tech", 15.0, DIM, 0.3);
-                        p.text(56.0, 746.0, Align2::LEFT_CENTER, "Writes the boot area only (16 KiB).", "tech", 15.0, DIM, 0.3);
-                    }
-                    src => {
-                        let (lab, kind) = if src == BootSource::Stock { ("PACKAGE", FileKind::Stock) } else { ("BOOTLOADER", FileKind::BootFile) };
-                        let v = st.file(kind);
-                        p.text(56.0, 727.0, Align2::LEFT_CENTER, lab, "tech", 14.0, LAV, 1.5);
-                        let field = board.r(200.0, 708.0, 514.0, 38.0);
-                        p.rect(field, hex(0x1d1917));
-                        p.frame(field, hex(0x5a5060), 1.0);
-                        let (txt, col) = match v { Some(v) => (v, INK), None => ("no file chosen".into(), hex(0x5c534d)) };
-                        p.text_fit(214.0, 727.0, &txt, "plex", 17.0, 490.0, col, 0.0);
-                        let br = board.r(728.0, 708.0, 146.0, 38.0);
-                        let (c, h) = clicked("choosebootfile", br);
-                        key(&p, br, false, h && active, !active);
-                        p.text(801.0, 727.0, Align2::CENTER_CENTER, "CHOOSE FILE", "cond", 18.0, KEYINK, 1.6);
-                        if c && active {
-                            self.ctl.choose_file(kind);
-                        }
-                    }
-                }
-                p.text(56.0, 772.0, Align2::LEFT_CENTER, &auto_line, "tech", 13.5, LAV, 2.0);
+            if fw {
+                let auto_line = match &st.backup_saved {
+                    Some(n) => format!("AUTO BACKUP SAVED · {n}"),
+                    None => "AUTO BACKUP BEFORE EVERY WRITE · THE BOOTLOADER IS KEPT".into(),
+                };
+                p.text(38.0, 858.0, Align2::LEFT_CENTER, &auto_line, "tech", 13.5, LAV, 2.0);
+            } else if checkbox(ui, &p, 38.0, 858.0, "Keep this unit's bootloader (don't restore the boot area)", st.keep_boot, active) {
+                self.ctl.set_keep_boot(!st.keep_boot);
             }
         }
-
-        // ---- primary key ----
-        let pr = board.r(38.0, 796.0, 853.0, 62.0);
-        let (pc, ph) = clicked("primary", pr);
-        let ready = dev.is_some() && st.plan.as_ref().is_some_and(|p| p.ready) && st.phase != Phase::Done;
-        let label = match (st.phase, st.mode) {
-            (Phase::Connecting, _) => "READING…",
-            (Phase::Working, Mode::Backup) => "SAVING…",
-            (Phase::Working, _) => "WRITING…",
-            (Phase::Done, _) => "DONE",
-            (_, Mode::Backup) => "SAVE FULL BACKUP",
-            (_, Mode::Restore) => "REVIEW & RESTORE",
-            _ => "REVIEW & FLASH",
-        };
-        key(&p, pr, false, ph && active && ready, !(active && ready));
-        let lw = p.measure(label, "cond", 32.0, 3.0);
-        let lx = 38.0 + (853.0 - lw - 48.0) / 2.0;
-        draw_icon(&p, Icon::Bolt, lx, 812.0, 30.0, MINT);
-        p.text(lx + 48.0, 827.0, Align2::LEFT_CENTER, label, "cond", 32.0, KEYINK, 3.0);
-        if pc && active && ready {
-            if st.mode == Mode::Backup {
-                self.ctl.save_backup();
-            } else if st.mode == Mode::Firmware && st.boot_first.is_some() {
-                self.dialog = Dialog::TwoStep;
-            } else {
-                self.dialog = Dialog::Review;
-            }
-        } else if pc && !modal {
-            self.nudged = now;
         }
 
         // ---- transfer progress ----
@@ -605,8 +559,8 @@ impl eframe::App for App {
 
 impl App {
     /// The Library tab: The Firmware Hub's list and the official packages,
-    /// below the LCD. INSTALL chooses the package for FLASH FIRMWARE and goes
-    /// back to the device, where REVIEW & FLASH writes it as any firmware.
+    /// below the LCD. INSTALL checks the unit, plans the package and opens its
+    /// review over this tab: WRITE there writes it as any firmware.
     fn library_view(&mut self, ui: &egui::Ui, p: &Painter, st: &Shared, active: bool) {
         let board = p.b;
         let clicked = |id: &str, r: Rect| -> (bool, bool) {
@@ -758,8 +712,9 @@ impl App {
                 }
             }
             if bc && installable {
+                // checked, planned and reviewed from here: its review opens over this tab
                 self.ctl.library_install(item.id.clone());
-                self.tab = Tab::Device;
+                self.op_open = Some(Mode::Firmware);
             } else if bc && !active {
                 self.nudged = ui.input(|i| i.time);
             }
@@ -778,8 +733,8 @@ impl App {
                        (false, false, false) => "BETAS OFF", _ => "THE FILTERS" }),
                    "tech", 11.0, WARN, 1.0);
         }
-        let note = if dev.is_none() { "GET downloads for later; to install, connect a unit in download mode." }
-                   else { "INSTALL chooses the firmware; REVIEW & FLASH writes it." };
+        let note = if dev.is_none() { "GET downloads for later. INSTALL checks the FM-1 first, then opens the review." }
+                   else { "INSTALL opens the firmware's review: nothing is written before WRITE." };
         p.text_fit(48.0, 950.0, &format!("{note}  {}", st.library_note), "tech", 13.0, 840.0, DIM, 0.3);
         p.text(48.0, 974.0, Align2::LEFT_CENTER, crate::library::ATTRIBUTION, "tech", 13.0, LAV, 0.6);
     }
@@ -976,9 +931,40 @@ impl App {
     fn dialogs(&mut self, ui: &egui::Ui, p: &Painter, st: &Shared, line: &str) {
         let (board, painter) = (p.b, p.p);
         let ctl = self.ctl.clone();
+        // the dialogs' own titles and keys (Figma: Notificações, side by side)
+        let chip = st.device.as_ref().map(|d| d.flash_label.split(" · ").next().unwrap_or("").to_string()).unwrap_or_default();
+        let alert_title = match &st.alert {
+            Some((_, t)) if t.contains("is now protected with m-bootloader") => format!("m-bootloader {} INSTALLED", st.open_version),
+            Some((_, t)) if t.ends_with("Restarting the FM-1…") => "RESTARTING FM-1".into(),
+            Some((_, t)) if t.contains("didn't show up on USB within 60 seconds") => "CHECK FM-1 DISPLAY".into(),
+            // Figma scenario 11: the firmware by the name it was chosen by
+            Some((_, t)) if t.contains("restarted and is running") => match (st.mode, st.file(FileKind::Firmware)) {
+                (Mode::Firmware, Some(f)) => format!("{} RUNNING", f.trim_end_matches(".fwsc").to_uppercase()),
+                _ => "FIRMWARE RUNNING".into(),
+            },
+            Some((_, t)) if t.starts_with("Backup saved") => "Backup saved".into(),
+            Some((_, t)) if t.contains("older flash chip") => format!("WARNING: NEW {chip} CHIP"),
+            _ => String::new(),
+        };
+        let boot_key = format!("INSTALL M-BOOTLOADER {}", st.open_version);
+        // a firmware's review: titled by what it installs, its plan in flash memory sectors on the LCD
+        let fw_name = st.file(FileKind::Firmware).unwrap_or_default().trim_end_matches(".fwsc").to_uppercase();
+        let fw_review = st.mode == Mode::Firmware;
+        let review_title = if fw_review { format!("Install {fw_name}?") } else { "REVIEW".into() };
+        let review_line = match &st.plan {
+            Some(p) if fw_review => format!("INSTALL {fw_name} · {} FLASH MEMORY SECTORS", p.count),
+            _ => line.to_string(),
+        };
+        // the review's WRITE key says what it installs
+        let write_key = match st.mode {
+            Mode::Firmware => format!("INSTALL {}", st.file(FileKind::Firmware).unwrap_or_default().trim_end_matches(".fwsc").to_uppercase()),
+            Mode::Bootloader => boot_key.clone(),
+            _ => format!("WRITE {} SECTORS", st.plan.as_ref().map(|p| p.count).unwrap_or(0)),
+        };
         // an alert from the controller wins over the user's dialogs
         let (title, body, keys): (&str, Vec<(String, Color32)>, Vec<(&str, u8)>) = if let Some((kind, text)) = &st.alert {
             let (t, c) = match kind {
+                _ if !alert_title.is_empty() => (alert_title.as_str(), if *kind == AlertKind::Done { MINT } else { BAD }),
                 AlertKind::Done => ("DONE", MINT),
                 AlertKind::Refused => ("REFUSED", BAD),
                 AlertKind::Error => ("ERROR", BAD),
@@ -987,7 +973,7 @@ impl App {
             if let Some(f) = t2.get_mut(0..1) { f.make_ascii_uppercase(); }
             (t, t2.split('\n').map(|l| (l.to_string(), c)).collect(), vec![("OK", 1)])
         } else if let Some(text) = &st.how_to {
-            ("PUT THE UNIT IN DOWNLOAD MODE", text.split('\n').map(|l| (l.to_string(), INK)).collect(), vec![("CANCEL", 12)])
+            ("Manual Action: put FM-1 in Download Mode", text.split('\n').map(|l| (l.to_string(), INK)).collect(), vec![("CANCEL", 12)])
         } else if let (Some(menu_key), Dialog::None) = (st.suggest_boot, &self.dialog) {
             ("INSTALL M-BOOTLOADER?", vec![
                 ("This unit has M-VAVE's stock bootloader. We recommend installing m-bootloader: if a firmware ever \
@@ -1012,24 +998,33 @@ impl App {
                         None => "A full backup of the unit is saved first; everything written is read back and verified.".into(),
                     }, MINT));
                     b.push(("Do not unplug or switch off the unit while it writes.".into(), BAD));
-                    ("REVIEW", b, vec![("CANCEL", 0), ("WRITE", 2)])
+                    (review_title.as_str(), b, vec![("CANCEL", 0), ("WRITE", 2)])
                 }
                 Dialog::TwoStep => {
-                    let Some(plan) = st.plan.as_ref().filter(|p| p.ready && st.phase == Phase::Ready) else {
+                    if !st.plan.as_ref().is_some_and(|p| p.ready && st.phase == Phase::Ready) {
                         self.dialog = Dialog::None;
                         return;
-                    };
+                    }
                     let key = st.boot_first.unwrap_or("PLAY");
                     let fw = st.file(FileKind::Firmware).unwrap_or_default();
-                    ("INSTALL IN TWO STEPS", vec![
-                        ("This unit has M-VAVE's stock bootloader: if the new firmware does not start, only a USB_KEY \
-                          dongle reaches download mode. m-bootloader goes first.".into(), INK),
-                        (format!("1 · m-bootloader {} · the boot area only, 0x00000-0x03FFF (16 KiB). Then REC while \
-                                  switching on: download mode; {key}: the recovery menu.", st.open_version), MINT),
-                        (format!("2 · {} · {} sectors ({} KiB): {}. Its review opens when step 1 is written.",
-                                 fw.trim_end_matches(".fwsc"), plan.count, plan.count * 4, plan.short), INK),
+                    // Figma: scenario 5 (46:466)
+                    let (unit, rec) = if key == "SEQ PLAY" { ("SMK-37", "SEQ REC") } else { ("FM-1", "REC") };
+                    ("STOCK BOOTLOADER DETECTED: REPLACE IT WITH M-BOOTLOADER (2-STEPS)", vec![
+                        (format!("This {unit} has M-VAVE's stock bootloader. If the new firmware does not start, only a \
+                                  hardware accessory enables the {unit} to enter Download Mode. The recommendation is to \
+                                  replace the stock bootloader with m-bootloader."), INK),
+                        (String::new(), INK),
+                        (format!("Step 1 · m-bootloader {} · the boot area only, 0x00000-0x03FFF (16 KiB).",
+                                 st.open_version), MINT),
+                        (format!("After that, it's easier to access Download Mode and Recovery Menu. Keep {rec} button \
+                                  pressed for Download Mode or {key} button for Recovery Menu before switching on the \
+                                  {unit}."), INK),
+                        (String::new(), INK),
+                        (format!("Step 2 · The app shows the {} confirmation box. It only installs the firmware with \
+                                  your authorization.", fw.trim_end_matches(".fwsc")), MINT),
+                        (String::new(), INK),
                         ("Each step is reviewed, backed up first and verified, as any write.".into(), DIM),
-                    ], vec![("CANCEL", 0), ("SKIP M-BOOTLOADER", 10), ("INSTALL STEP 1", 11)])
+                    ], vec![("CANCEL", 0), ("SKIP M-BOOTLOADER", 10), (boot_key.as_str(), 11)])
                 }
                 Dialog::Delete(_, ref name, ref versions) => ("DELETE FROM THIS COMPUTER?", vec![
                     (format!("Deletes the downloaded {name} ({versions}) from this computer."), INK),
@@ -1049,6 +1044,19 @@ impl App {
                     ("M-Flasher is free. It isn't signed yet, which is why Windows and macOS ask before it first \
                       starts; signing costs money every year, and donations would pay for it.".into(), INK),
                 ], vec![("GITHUB SPONSORS", 7), ("KO-FI", 8), ("CLOSE", 0)]),
+                Dialog::Backups => {
+                    let mut b = vec![("Choose one to restore. Its plan opens for review; nothing is written before WRITE.".to_string(), DIM)];
+                    b.extend(st.backups.iter().take(3).enumerate()
+                        .map(|(i, x)| (format!("{} · {} · {} · {}", i + 1, x.time, x.firmware, x.name), INK)));
+                    if st.backups.is_empty() {
+                        b.push(("No backups on this computer yet.".into(), WARN));
+                    }
+                    let mut keys = vec![("CANCEL", 0u8)];
+                    for (i, k) in ["RESTORE BACKUP 1", "RESTORE BACKUP 2", "RESTORE BACKUP 3"].iter().enumerate().take(st.backups.len().min(2)) {
+                        keys.push((*k, 21 + i as u8));
+                    }
+                    ("FROM BACKUPS", b, keys)
+                }
                 Dialog::Model => {
                     let mut b = vec![
                         ("The model could not be identified for certain. Writing the wrong model's firmware or".to_string(), INK),
@@ -1071,12 +1079,18 @@ impl App {
         let d = board.r(388.0, top, 760.0, h);
         p.vgrad(d, hex(0x302925), hex(0x241f1c));
         p.frame(d, hex(0x6d5f85), 1.0);
-        p.label(420.0, top + 32.0, title, Some(1116.0));
+        // the title (Figma: Header, Share Tech Mono 18, upper case): lavender, mint when done, red when refused
+        let title_color = match &st.alert {
+            Some((AlertKind::Done, _)) => MINT,
+            Some(_) => BAD,
+            None => LAV,
+        };
+        p.text(420.0, top + 32.0, Align2::LEFT_CENTER, &title.to_uppercase(), "tech", 24.0, title_color, 0.0);
         let mut y = top + 64.0;
         if review {
             let lcd = board.r(420.0, y, 696.0, 52.0);
             p.vgrad(lcd, LCD1, LCD2);
-            p.text_fit(436.0, y + 26.0, line, "lcd", 28.0, 664.0, LCDINK, 1.0);
+            p.text_fit(436.0, y + 26.0, &review_line, "lcd", 28.0, 664.0, LCDINK, 1.0);
             y += 66.0;
         }
         for (l, c) in &wrapped {
@@ -1087,12 +1101,12 @@ impl App {
         for (label, code) in keys.iter().rev() {
             // the key we recommend: lit
             let primary = matches!(code, 2 | 5 | 11);
-            let w = if primary { 254.0 } else { (p.measure(label, "cond", 22.0, 1.6) + 48.0).max(150.0) };
+            let t = if *code == 2 { write_key.clone() } else { label.to_string() };
+            let w = (p.measure(&t, "cond", 22.0, 1.6) + 48.0).max(if primary { 254.0 } else { 150.0 });
             x -= w;
             let r = board.r(x, top + h - 78.0, w, 52.0);
             let resp = ui.interact(r, ui.id().with(("dlg", *label)), Sense::click());
             key(p, r, primary, resp.hovered(), false);
-            let t = if *code == 2 { format!("WRITE {} SECTORS", st.plan.as_ref().map(|p| p.count).unwrap_or(0)) } else { label.to_string() };
             p.text(x + w / 2.0, top + h - 52.0, Align2::CENTER_CENTER, &t, "cond", 22.0, KEYINK, 1.6);
             if resp.clicked() {
                 if st.alert.is_some() {
@@ -1115,6 +1129,11 @@ impl App {
                             }
                         }
                         12 => ctl.cancel_install_wait(),
+                        21..=23 => {
+                            if let Some(x) = st.backups.get((*code - 21) as usize) {
+                                ctl.pick_backup(x.path.clone());
+                            }
+                        }
                         // m-bootloader, then the firmware: reviewed as installing it (opens once planned)
                         11 => {
                             ctl.bootloader_then_firmware();
@@ -1433,7 +1452,7 @@ fn lcd_icon(p: &Painter, x: f32, y: f32, synth: bool) {
 }
 
 #[derive(Clone, Copy)]
-enum Icon { Backup, Restore, Chip, Boot, Bolt }
+enum Icon { Backup, Restore, Chip, Boot }
 
 fn draw_icon(p: &Painter, icon: Icon, x: f32, y: f32, size: f32, color: Color32) {
     let b = p.b;
@@ -1466,13 +1485,6 @@ fn draw_icon(p: &Painter, icon: Icon, x: f32, y: f32, size: f32, color: Color32)
                 p.p.circle_filled(pt(23.0, 23.0), 6.0 * u * b.s, KEY_BOT);
                 p.p.circle_stroke(pt(23.0, 23.0), 3.2 * u * b.s, st);
             }
-        }
-        Icon::Bolt => {
-            let pts = [(18.0, 2.0), (7.0, 18.0), (15.0, 18.0), (13.0, 30.0), (25.0, 13.0), (17.0, 13.0)];
-            p.p.add(Shape::convex_polygon(vec![pt(18.0, 2.0), pt(7.0, 18.0), pt(15.0, 18.0)], color, Stroke::NONE));
-            p.p.add(Shape::convex_polygon(vec![pt(15.0, 18.0), pt(13.0, 30.0), pt(25.0, 13.0), pt(17.0, 13.0)], color, Stroke::NONE));
-            p.p.add(Shape::convex_polygon(vec![pt(18.0, 2.0), pt(15.0, 18.0), pt(17.0, 13.0)], color, Stroke::NONE));
-            let _ = pts;
         }
     }
 }

@@ -1605,7 +1605,7 @@ mod two_step {
         assert_eq!(s.mode, Mode::Firmware);
         assert_eq!(s.phase, Phase::Ready);
         assert!(s.review_next, "the firmware's review opens next");
-        assert!(s.alert.as_ref().is_some_and(|a| a.1.contains("Step 1 of 2") && a.1.contains("2.4")));
+        assert!(s.alert.as_ref().is_some_and(|a| a.1.contains("is now protected with m-bootloader 2.4")));
         assert!(s.files.contains_key("firmware"), "the firmware stays chosen");
         assert!(!s.end_step_one(4), "once only");
     }
@@ -1644,36 +1644,63 @@ mod download_mode {
 
     #[test]
     fn m_bootloader_says_rec_while_switching_on() {
-        let t = how_to("yes", "ChoralRoot", "FM-1", Some("ChoralRoot FM-1"));
-        assert!(t.contains("Hold REC and switch it on"));
+        let t = how_to("yes", "ChoralRoot", "FM-1", Some("ChoralRoot FM-1"), true);
+        assert!(t.contains("Hold REC and switch FM-1 on"));
         assert!(!t.contains("OCT-"));
-        assert!(t.contains("did not switch by itself"));
+        assert!(t.contains("did not switch automatically to Download Mode"));
+        assert!(t.starts_with("The M-Vave FM-1 did not switch"), "the unit by its model, not its MIDI port's name");
+        assert!(how_to("", "", "", Some("Caravel"), false).starts_with("The M-Vave FM-1 "));
+        assert!(how_to("yes", "", "SMK-37 Pro", Some("SMK-37 Elite"), false).starts_with("The M-Vave SMK-37 "));
     }
 
     #[test]
     fn smk37_uses_seq_rec() {
-        assert!(how_to("yes", "", "SMK-37 Pro", None).contains("Hold SEQ REC"));
+        assert!(how_to("yes", "", "SMK-37 Pro", None, true).contains("Hold SEQ REC"));
     }
 
     #[test]
     fn felucca_adds_the_oct_keys() {
-        let t = how_to("yes", "Felucca", "FM-1", None);
+        let t = how_to("yes", "Felucca", "FM-1", None, true);
         assert!(t.contains("REC") && t.contains("OCT- and OCT+"));
-        assert!(how_to("no", "Felucca", "FM-1", None).starts_with("This computer can't see"));
-        assert!(how_to("", "", "FM-1", Some("Caravel")).contains("OCT- and OCT+ together for 5 s"));
+        assert!(how_to("no", "Felucca", "FM-1", None, true).starts_with("M-Flasher can't see your M-Vave FM-1"));
+        assert!(how_to("", "", "FM-1", Some("Caravel"), true).contains("OCT- and OCT+ buttons together for 5 seconds"));
     }
 
     #[test]
     fn stock_firmware_on_stock_bootloader_has_no_keys() {
-        let t = how_to("no", "M-VAVE 015", "FM-1", None);
-        assert!(t.contains("its keys can't do it"));
+        let t = how_to("no", "M-VAVE 015", "FM-1", None, true);
+        assert!(t.contains("its buttons can't do it"));
         assert!(!t.contains("Hold REC"));
     }
 
     #[test]
     fn unknown_unit_lists_every_way() {
-        let t = how_to("", "", "", None);
+        let t = how_to("", "", "", None, true);
         assert!(t.contains("With m-bootloader") && t.contains("OCT-") && t.contains("M-VAVE's own firmware"));
-        assert!(t.contains("Nothing is written until you press WRITE"));
+        assert!(t.ends_with("M-Flasher needs Download Mode to check your FM-1 properly."));
+        assert!(how_to("", "", "", None, false).contains("press CHECK FM1 STATUS again"));
     }
 }
+
+
+/// The operation log on disk: every line, with its date, next to the backups.
+mod log_file {
+    use crate::controller::log_to_file;
+
+    #[test]
+    fn lines_go_to_m_flasher_log_next_to_the_backups() {
+        let root = std::env::temp_dir().join(format!("mflr-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let backups = root.join("M-Flasher").join("backups");
+        log_to_file(&backups, "Restarting the unit: it leaves download mode and starts what was written");
+        log_to_file(&backups, "Running: the Caravel is on USB MIDI");
+        let text = std::fs::read_to_string(root.join("M-Flasher").join("m-flasher.log")).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].ends_with(" Restarting the unit: it leaves download mode and starts what was written"));
+        assert!(lines[1].ends_with(" Running: the Caravel is on USB MIDI"));
+        assert_eq!(lines[1].len() - "Running: the Caravel is on USB MIDI".len(), 20, "a date and time before each line");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+

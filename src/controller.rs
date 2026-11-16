@@ -35,6 +35,10 @@ pub enum Mode {
     Bootloader,
 }
 
+// The window installs the bundled m-bootloader only (Device: INSTALL
+// M-BOOTLOADER); the stock and .boot sources stay for the planner and the
+// command line.
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BootSource {
     Open,
@@ -57,6 +61,7 @@ pub enum Stage {
     Done,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum FileKind {
     Restore,
@@ -101,7 +106,11 @@ pub struct DeviceView {
     pub app: String,
     pub app_ok: bool,
     pub bootloader: String,
+    /// m-bootloader is the unit's bootloader (its rescue mode is there).
+    pub boot_open: bool,
     pub flash: String,
+    /// The chip with its name: "Puya P25Q80H · 0x856014 (old)".
+    pub flash_label: String,
     pub chip_key: String,
     pub chip_key_ok: bool,
     pub evidence: Vec<String>,
@@ -165,6 +174,11 @@ pub struct Shared {
     /// A unit running normally, found on USB MIDI (its name), while none is in
     /// download mode: the soft key can switch it.
     pub midi: Option<String>,
+    /// After a write's restart: the scan reports every MIDI port (name, taken for a unit) in `midi_ports`, even
+    /// while the write's work runs. On macOS only the scan's thread sees the list change (its run loop gets
+    /// CoreMIDI's notifications); a list made on another thread stays as it was.
+    pub watching_restart: bool,
+    pub midi_ports: Option<Vec<(String, bool)>>,
     /// Recommend m-bootloader to the user (the unit has the stock bootloader):
     /// the key that opens its recovery menu.
     pub suggest_boot: Option<&'static str>,
@@ -185,8 +199,10 @@ pub struct Shared {
     pub install_after: Option<String>,
     /// How to put the unit in download mode by hand, shown while INSTALL waits for it.
     pub how_to: Option<String>,
-    /// Library INSTALL planned: the window opens its review (or the two steps).
+    /// Library INSTALL planned: the window goes back to DEVICE, its firmware form open.
     pub library_review: bool,
+    /// The firmware chosen comes from the library: its name and version.
+    pub library_choice: Option<String>,
 }
 
 fn file_key(k: FileKind) -> &'static str {
@@ -214,8 +230,6 @@ pub struct Controller {
     /// Windows could not open at all: not tried, nor asked about, again every
     /// scan, only once it is reconnected.
     declined: Arc<Mutex<Option<String>>>,
-    /// The units m-bootloader was recommended for (unit ID, or path): once each.
-    suggested: Arc<Mutex<Vec<String>>>,
     /// The unit that last failed to connect, and how many times in a row.
     failures: Arc<Mutex<(String, u32)>>,
     /// Linux: a unit is in download mode but the SCSI generic driver isn't
@@ -244,6 +258,8 @@ impl Shared {
         Shared {
             phase: Phase::Waiting,
             busy: false,
+            watching_restart: false,
+            midi_ports: None,
             multiple: false,
             device: None,
             map: vec![Region::Free; 256],
@@ -274,6 +290,7 @@ impl Shared {
             install_after: None,
             how_to: None,
             library_review: false,
+            library_choice: None,
         }
     }
 
@@ -306,8 +323,8 @@ impl Shared {
         self.mode = Mode::Firmware;
         self.phase = Phase::Ready;
         self.review_next = true;
-        self.alert = Some((AlertKind::Done, format!("Step 1 of 2 done: m-bootloader {} written and verified \
-            ({total} sectors). Step 2: the firmware's review opens next.", self.open_version)));
+        self.alert = Some((AlertKind::Done, format!("FM-1 bootloader is now protected with m-bootloader {}. It was \
+            written and verified ({total} sectors). Next Step: Confirm firmware install.", self.open_version)));
         true
     }
 }
@@ -315,13 +332,14 @@ impl Shared {
 impl Controller {
     pub fn new(ctx: egui::Context) -> Controller {
         let open_version = bundled_bootloader(BOARDS[1]).map(|(_, v)| v).unwrap_or_else(|_| "?".into());
+        // shown as its release ("2.4"); the log keeps the build ("2.4-395e6cc")
+        let shown_version = open_version.split('-').next().unwrap_or(&open_version).to_string();
         let backup_dir = default_backup_dir();
         let c = Controller {
-            shared: Arc::new(Mutex::new(Shared::new(open_version.clone(), backup_dir))),
+            shared: Arc::new(Mutex::new(Shared::new(shown_version, backup_dir))),
             unit: Arc::new(Mutex::new(None)),
             plan: Arc::new(Mutex::new(None)),
             declined: Arc::new(Mutex::new(None)),
-            suggested: Arc::new(Mutex::new(vec![])),
             failures: Arc::new(Mutex::new((String::new(), 0))),
             sg_missing: Arc::new(AtomicBool::new(false)),
             choices: Arc::new(AtomicU64::new(0)),
@@ -347,13 +365,15 @@ impl Controller {
     }
 
     pub fn log(&self, text: String) {
-        self.with(|s| {
+        let dir = self.with(|s| {
             s.log.push(format!("[{}] {text}", now()));
             let n = s.log.len();
             if n > 200 {
                 s.log.drain(..n - 200);
             }
+            s.backup_dir.clone()
         });
+        log_to_file(&dir, &text);
     }
 
     /// Run f in a thread unless something is running; errors become alerts.
@@ -409,8 +429,17 @@ impl Controller {
 
     fn scan_loop(&self) {
         loop {
+            if self.shared.lock().unwrap().watching_restart {
+                let ports = crate::midi::port_names();
+                self.with(|s| if s.watching_restart { s.midi_ports = Some(ports) });
+            }
             if !self.shared.lock().unwrap().busy {
                 let devs = find_devices();
+                // the scan may have waited for the USB (the helper) while a work started: it acts on nothing then
+                if self.shared.lock().unwrap().busy {
+                    std::thread::sleep(Duration::from_millis(300));
+                    continue;
+                }
                 let connected = self.unit.lock().unwrap().as_ref().map(|u| u.dev.path().to_string());
                 let declined = {
                     let mut d = self.declined.lock().unwrap();
@@ -440,7 +469,14 @@ impl Controller {
                     (None, true) => crate::midi::find_units().into_iter().next().map(|u| u.name),
                     _ => None,
                 };
-                if self.shared.lock().unwrap().midi != midi {
+                let was = self.shared.lock().unwrap().midi.clone();
+                if was != midi {
+                    // in the log too: a unit showing up running is how a restart is seen to have worked
+                    match (&was, &midi) {
+                        (None, Some(n)) => self.log(format!("{n} found on USB MIDI: running")),
+                        (Some(n), None) => self.log(format!("{n} left USB MIDI")),
+                        _ => {}
+                    }
                     self.with(|s| s.midi = midi);
                 }
             }
@@ -469,38 +505,6 @@ impl Controller {
         }
     }
 
-    /// Switch the unit found on USB MIDI to download mode (the soft key); the
-    /// scan then finds and connects it.
-    pub fn enter_download_mode(&self) {
-        self.work("switching to download mode", |c| {
-            let units = crate::midi::find_units();
-            let unit = match units.len() {
-                0 => return Err(Error::Refused("the unit is no longer on USB MIDI".into())),
-                1 => &units[0],
-                _ => return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into())),
-            };
-            unit.soft_key().map_err(Error::Io)?;
-            c.log(format!("Sent the {} the download-mode message over USB MIDI; waiting for it", unit.name));
-            c.with(|s| s.midi = None);
-            // (the scan is paused while this runs: it connects once we return)
-            for _ in 0..40 {
-                std::thread::sleep(Duration::from_millis(500));
-                if !find_devices().is_empty() {
-                    return Ok(());
-                }
-                // back, but not to be seen without the driver
-                if crate::scsi::needs_sg_driver() {
-                    c.sg_missing.store(true, Ordering::SeqCst);
-                    return Err(Error::Refused(crate::scsi::SG_DRIVER.into()));
-                }
-            }
-            Err(Error::Refused(format!(
-                "the {} did not come back in download mode within 20 s: its firmware may not know the message; \
-                 use its keys instead",
-                unit.name
-            )))
-        });
-    }
 
     /// After a write: the unit leaves download mode by the restart (the
     /// command line's `--restart`; the firmware is not running yet, so MIDI
@@ -508,6 +512,9 @@ impl Controller {
     /// USB MIDI and says whether it started.
     fn restart_unit(&self, total: usize) {
         let written = format!("{total} sectors written, read back and verified.");
+        // the MIDI ports before, as the scan sees them: a port that shows up after the restart is the unit,
+        // whatever its firmware calls it
+        let before: Vec<String> = self.watched_ports(true).unwrap_or_default().into_iter().map(|(n, _)| n).collect();
         let sent = {
             let mut g = self.unit.lock().unwrap();
             g.as_mut().map(|u| (u.dev.path().to_string(), u.dev.restart()))
@@ -516,40 +523,77 @@ impl Controller {
             Some((path, Ok(_))) => path,
             Some((_, Err(e))) => {
                 self.log(format!("Could not restart the unit ({e}): switch it off and on"));
+                self.with(|s| { s.watching_restart = false; s.midi_ports = None; });
                 return;
             }
-            None => return,
+            None => {
+                self.with(|s| { s.watching_restart = false; s.midi_ports = None; });
+                return;
+            }
         };
         self.log("Restarting the unit: it leaves download mode and starts what was written".into());
         self.drop_unit();
         let say = |kind: AlertKind, text: String| self.with(|s| s.alert = Some((kind, text)));
-        say(AlertKind::Done, format!("{written} Restarting the unit…"));
+        say(AlertKind::Done, format!("{written} Restarting the FM-1…"));
         let gone = (0..20).any(|_| {
             std::thread::sleep(Duration::from_millis(250));
             !find_devices().iter().any(|(p, _)| *p == path)
         });
         if !gone {
+            self.with(|s| { s.watching_restart = false; s.midi_ports = None; });
             self.log("The unit did not leave download mode".into());
             say(AlertKind::Done, format!("{written} The unit did not restart: switch it off and on to start it."));
             return;
         }
-        for _ in 0..120 {
+        let running = (0..120).find_map(|_| {
             std::thread::sleep(Duration::from_millis(500));
-            if let Some(u) = crate::midi::find_units().into_iter().next() {
-                self.log(format!("Running: the {} is on USB MIDI", u.name));
-                say(AlertKind::Done, format!("{written} The unit restarted and is running ({} on USB MIDI).", u.name));
+            if !find_devices().is_empty() {
+                return Some(Err(()));
+            }
+            let ports = self.shared.lock().unwrap().midi_ports.clone().unwrap_or_default();
+            ports.iter().find(|(_, unit)| *unit).or_else(|| ports.iter().find(|(n, _)| !before.contains(n)))
+                .map(|(n, _)| Ok(n.clone()))
+        });
+        self.with(|s| { s.watching_restart = false; s.midi_ports = None; });
+        match running {
+            Some(Ok(name)) => {
+                self.log(format!("Running: the {name} is on USB MIDI"));
+                say(AlertKind::Done, format!("{written} The FM-1 restarted and is running."));
                 return;
             }
-            if !find_devices().is_empty() {
+            Some(Err(())) => {
                 self.log("The unit came back in download mode: what was written did not start".into());
                 say(AlertKind::Error, format!("{written} But the unit came back in download mode: what was written \
                     did not start. Its backup is saved: restore it, or install another firmware."));
                 return;
             }
+            None => {}
         }
         self.log("Restarted; not on USB MIDI within 60 s".into());
-        say(AlertKind::Done, format!("{written} The unit restarted; it has not shown up on USB MIDI within 60 s \
-            (not every firmware has USB MIDI): look at its screen."));
+        // written and verified, restarted, only not seen: what was written comes first (Figma: scenario 12)
+        let what = match self.shared.lock().unwrap().mode {
+            Mode::Restore => "The backup was restored",
+            Mode::Bootloader => "m-bootloader was installed",
+            _ => "The firmware was installed",
+        };
+        say(AlertKind::Done, format!("{what} and verified ({total} sectors), and the FM-1 restarted. M-Flasher couldn't \
+            confirm it's running: the FM-1 didn't show up on USB within 60 seconds. Look at the FM-1 display: if the new \
+            firmware shows up, it's ready. If not, switch the FM-1 off and on."));
+    }
+
+    /// The MIDI ports the scan reports while a restart is watched (`start`: watching begins, and this waits
+    /// for the scan's first report, up to 3 s).
+    fn watched_ports(&self, start: bool) -> Option<Vec<(String, bool)>> {
+        if start {
+            self.with(|s| { s.watching_restart = true; s.midi_ports = None; });
+        }
+        (0..30).find_map(|_| {
+            let p = self.shared.lock().unwrap().midi_ports.clone();
+            if p.is_none() {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            p
+        })
     }
 
     fn drop_unit(&self) {
@@ -632,6 +676,7 @@ impl Controller {
                 return Err(e);
             }
         };
+        let mut unit = unit;
         let view = device_view(&unit);
         c.log(format!("{} · {} · bootloader {} · flash read and checked", view.model, view.firmware, view.bootloader));
         c.log(format!("Loader: {}{}", unit.dev.loader(),
@@ -644,13 +689,7 @@ impl Controller {
             c.log("The model is not certain: check it under DEVICE INFO before writing".into());
         }
         let map = sector_map(&unit.flash, unit.dev.chip_key(), unit.board());
-        let suggest = unit.bootloader_suggestion().filter(|_| {
-            let id = unit.unit_id.clone().unwrap_or_else(|| path.clone());
-            let mut asked = c.suggested.lock().unwrap();
-            !asked.contains(&id) && { asked.push(id); true }
-        });
         remember_unit(&unit, &view);
-        let mut unit = unit;
         unit.show_on_unit();
         *c.unit.lock().unwrap() = Some(unit);
         c.with(|s| {
@@ -659,7 +698,7 @@ impl Controller {
             s.phase = Phase::Ready;
             s.stage[0] = Stage::Done;
             s.pct = 0.0;
-            s.suggest_boot = suggest;
+            s.suggest_boot = None;
         });
         c.replan_now();
         Ok(())
@@ -829,10 +868,6 @@ impl Controller {
         self.replan();
     }
 
-    pub fn set_boot_source(&self, v: BootSource) {
-        self.choose(|s| s.boot_source = v);
-        self.replan();
-    }
 
     pub fn set_model(&self, key: &str) {
         if let Some(b) = BOARDS.iter().copied().find(|b| b.key == key) {
@@ -876,6 +911,9 @@ impl Controller {
                 if let Some(p) = picked {
                     c.choices.fetch_add(1, Ordering::SeqCst);
                     s.files.insert(file_key(kind), p);
+                    if kind == FileKind::Firmware {
+                        s.library_choice = None;
+                    }
                 }
                 c.picking.fetch_sub(1, Ordering::SeqCst);
             });
@@ -1015,7 +1053,7 @@ impl Controller {
         self.work("the library", move |c| {
             // download mode first: the soft key, or the keys by hand (then the scan carries on)
             if c.unit.lock().unwrap().is_none() {
-                match c.reach_download_mode()? {
+                match c.reach_download_mode(true)? {
                     Some(path) => c.connect_now(&path)?,
                     None => {
                         c.with(|s| s.install_after = Some(id));
@@ -1028,6 +1066,24 @@ impl Controller {
     }
 
     /// INSTALL's wait for download mode given up.
+    /// CHECK FM1 STATUS: the unit connected is read again; otherwise one in
+    /// download mode, or a running one switched by the soft key (or by hand:
+    /// `how_to`), is read. Nothing is written.
+    pub fn check(&self) {
+        self.work("checking the unit", |c| {
+            let kept = c.unit.lock().unwrap().as_ref().map(|u| u.dev.path().to_string());
+            if let Some(path) = kept {
+                c.drop_unit();
+                return c.connect_now(&path);
+            }
+            match c.reach_download_mode(false)? {
+                Some(path) => c.connect_now(&path),
+                // switched by hand: the scan reads it when it shows up
+                None => Ok(()),
+            }
+        });
+    }
+
     pub fn cancel_install_wait(&self) {
         if self.with(|s| { s.how_to = None; s.install_after.take() }).is_some() {
             self.log("Install cancelled".into());
@@ -1041,7 +1097,7 @@ impl Controller {
     /// The unit in download mode for INSTALL: the one already in it, or the one
     /// on USB MIDI switched by the soft key. None when it has to be switched by
     /// hand: `how_to` then says how, for this unit as last read.
-    fn reach_download_mode(&self) -> Result<Option<String>, Error> {
+    fn reach_download_mode(&self, install: bool) -> Result<Option<String>, Error> {
         let devs = find_devices();
         match devs.len() {
             0 => {}
@@ -1077,7 +1133,7 @@ impl Controller {
             self.log("No unit in download mode or running on USB MIDI".into());
         }
         let (rescue, firmware, model) = last_unit();
-        self.with(|s| s.how_to = Some(how_to(&rescue, &firmware, &model, running.as_deref())));
+        self.with(|s| s.how_to = Some(how_to(&rescue, &firmware, &model, running.as_deref(), install)));
         Ok(None)
     }
 
@@ -1100,6 +1156,7 @@ impl Controller {
             }
             // m-bootloader first, on a unit with the stock one: REVIEW & FLASH opens the two steps
             c.log(format!("Library: {} {} chosen ({})", inst.name, inst.version, inst.credit));
+            c.with(|s| s.library_choice = Some(format!("{} {}", inst.name, inst.version)));
             c.choose(|s| {
                 s.files.insert("firmware", inst.path.clone());
                 s.mode = Mode::Firmware;
@@ -1369,7 +1426,12 @@ fn device_view(u: &Unit) -> DeviceView {
             crate::boards::BootKind::Open => a.bootloader_text.split(" (").next().unwrap_or_default().to_string(),
             _ => a.bootloader_text.clone(),
         },
+        boot_open: a.bootloader == crate::boards::BootKind::Open,
         flash: flash_text(u.dev.flash_id()),
+        flash_label: match crate::boards::flash_name(u.dev.flash_id()) {
+            Some(n) => format!("{n} · {}", flash_text(u.dev.flash_id())),
+            None => flash_text(u.dev.flash_id()),
+        },
         chip_key: format!("0x{:04X}", u.dev.chip_key()),
         chip_key_ok: u.dev.chip_key() == CHIP_KEY,
         evidence: a.evidence.iter().map(|e| e.2.clone()).collect(),
@@ -1421,27 +1483,52 @@ fn last_unit() -> (String, String, String) {
 /// it (as the Android app says it): m-bootloader's key while switching on,
 /// OCT- and OCT+ on the firmwares that know them; M-VAVE's own firmware on the
 /// stock bootloader only by the soft key. `running`: its name on USB MIDI.
-pub(crate) fn how_to(rescue: &str, firmware: &str, model: &str, running: Option<&str>) -> String {
+/// The unit as the user knows it: "M-Vave FM-1" or "M-Vave SMK-37", whatever
+/// name its firmware gives its MIDI port.
+pub(crate) fn unit_name(model: &str, midi: &str) -> &'static str {
+    if model.contains("SMK") || midi.to_uppercase().contains("SMK") { "M-Vave SMK-37" } else { "M-Vave FM-1" }
+}
+
+pub(crate) fn how_to(rescue: &str, firmware: &str, model: &str, running: Option<&str>, install: bool) -> String {
     let rec = if model.contains("SMK") { "SEQ REC" } else { "REC" };
+    let u = if model.contains("SMK") { "SMK-37" } else { "FM-1" };
     let fw = format!("{firmware} {}", running.unwrap_or_default()).to_lowercase();
     let oct = ["felucca", "caravel", "sloop", "snoop"].iter().any(|n| fw.contains(n));
     let why = match running {
-        Some(n) => format!("The {n} did not switch by itself: its firmware may not know the message from this \
-                            computer. Switch it by hand:"),
-        None => "This computer can't see the unit running. Check it is connected and switched on, or switch it \
-                 by hand:".into(),
+        // the unit by its model, not by the name its firmware gives the MIDI port ("Caravel"): that is metadata
+        Some(n) => format!("The {} did not switch automatically to Download Mode. Switch it manually following these steps:",
+                           unit_name(model, n)),
+        None => format!("M-Flasher can't see your M-Vave {u} running. Check it is connected and switched on, or switch it \
+                         manually following these steps:"),
     };
     let keys = match rescue {
-        "yes" => format!("1 · Switch it off.\n2 · Hold {rec} and switch it on.\n3 · Let go of {rec} once M-Flasher \
-                          finds it.{}", if oct { "\nOr, with it running: hold OCT- and OCT+ together for 5 s." } else { "" }),
-        _ if oct => "With it running: hold OCT- and OCT+ together for 5 s.".into(),
-        "no" => "It has M-VAVE's stock bootloader: its keys can't do it, only the message from this computer. \
-                 Switch it on, connect it with a data cable (some cables only charge) and press INSTALL again.".into(),
-        _ => format!("· With m-bootloader: hold {rec} while switching it on.\n\
-                      · With Felucca, SLOOP or Snoop37 running: hold OCT- and OCT+ together for 5 s.\n\
-                      · With M-VAVE's own firmware: switch it on, connect it and press INSTALL again: this computer \
-                      switches it."),
+        "yes" => format!("1 · Switch it off.\n2 · Hold {rec} and switch {u} on.\n3 · When M-Flasher finds your {u}, release the \
+                          {rec} button.{}",
+                         if oct { format!("\nOr, if your {u} is running, hold OCT- and OCT+ buttons together for 5 seconds.") } else { String::new() }),
+        _ if oct => format!("If your {u} is running, hold OCT- and OCT+ buttons together for 5 seconds."),
+        "no" => format!("It has M-VAVE's original bootloader: its buttons can't do it, only the message from M-Flasher. Switch \
+                         it on, connect it with a data cable (some cables only charge) and press {} again.",
+                        if install { "INSTALL" } else { "CHECK FM1 STATUS" }),
+        _ => format!("· With m-bootloader: hold {rec} while switching {u} on.\n\
+                      · With Felucca, SLOOP or Snoop37 running: hold OCT- and OCT+ buttons together for 5 seconds.\n\
+                      · With M-VAVE's own firmware: switch it on, connect it and press {} again: M-Flasher switches it.",
+                     if install { "INSTALL" } else { "CHECK FM1 STATUS" }),
     };
-    format!("{why}\n{keys}\nM-Flasher is waiting: once the unit is in download mode it reads it and opens the \
-             review. Nothing is written until you press WRITE there.")
+    format!("{why}\n{keys}\nM-Flasher needs Download Mode to check your {u} properly.")
+}
+
+/// The operation log kept on disk too, next to the backups' folder
+/// (Documents/M-Flasher/m-flasher.log): the window shows only its last lines,
+/// and they go with it. Past 1 MiB the file starts again, the last one kept as
+/// m-flasher.log.1.
+pub(crate) fn log_to_file(backup_dir: &Path, text: &str) {
+    use std::io::Write;
+    let path = backup_dir.parent().unwrap_or(backup_dir).join("m-flasher.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 1 << 20) {
+        let _ = std::fs::rename(&path, path.with_extension("log.1"));
+    }
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(backup_dir));
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{} {text}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    }
 }

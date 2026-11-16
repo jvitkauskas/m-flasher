@@ -64,6 +64,16 @@ pub fn flash_text(id: u32) -> String {
     format!("0x{id:06X}{which}")
 }
 
+/// The flash chip's maker and part, which owners use to tell the FM-1's
+/// older units from the newer: "Puya P25Q80H", "UCUN UC25HQ80".
+pub fn flash_name(id: u32) -> Option<&'static str> {
+    match id {
+        0x856014 => Some("Puya P25Q80H"),
+        0xB36014 => Some("UCUN UC25HQ80"),
+        _ => None,
+    }
+}
+
 /// Whether m-bootloader has been run on this flash chip.
 pub fn flash_tested(id: u32) -> bool {
     BOARDS.iter().any(|b| b.flash_id == id || b.other_flash.contains(&id))
