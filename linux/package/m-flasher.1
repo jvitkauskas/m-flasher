@@ -68,11 +68,18 @@ verified.
 .SH COMMANDS
 .TP
 .B find
-List the units in download mode, and those running, on USB MIDI.
+List the units in download mode, and those running, on USB MIDI, and the
+other USB MIDI ports.
 .TP
-.B download\-mode
+.BR download\-mode " [" \-\-port
+.IR NAME ]
 Switch the unit that is running, connected over USB MIDI, to download mode:
-send it the SysEx F0 22 24 35 7D F7 and wait for it to come back.
+send it the SysEx F0 22 24 35 7D F7 and wait for it to come back. With
+.BR \-\-port ,
+send it to the MIDI port called
+.I NAME
+(or the only one whose name contains it), for a firmware whose port isn't
+recognised by its name.
 .TP
 .B restart
 Leave download mode: upload a short program to the chip's RAM that resets

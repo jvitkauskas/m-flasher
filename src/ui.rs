@@ -55,6 +55,8 @@ enum Dialog {
     Review,
     About,
     Model,
+    /// The MIDI port of a unit whose name isn't recognised.
+    Port,
 }
 
 pub struct App {
@@ -66,6 +68,8 @@ pub struct App {
     nudged: f64,
     /// m-bootloader was accepted when recommended: its review opens once planned.
     review_when_planned: bool,
+    /// The port chosen in the Port dialog.
+    port_pick: String,
     fonts: crate::fonts::Fonts,
 }
 
@@ -82,7 +86,8 @@ impl App {
         fonts.install(&cc.egui_ctx);
         // MFLASHER_DIALOG=about opens the About dialog at start (for screenshots)
         let dialog = if std::env::var("MFLASHER_DIALOG").as_deref() == Ok("about") { Dialog::About } else { Dialog::None };
-        App { ctl: Controller::new(cc.egui_ctx.clone()), dialog, noise: None, nudged: f64::NEG_INFINITY, review_when_planned: false, fonts }
+        App { ctl: Controller::new(cc.egui_ctx.clone()), dialog, noise: None, nudged: f64::NEG_INFINITY, review_when_planned: false,
+              port_pick: String::new(), fonts }
     }
 }
 
@@ -346,11 +351,33 @@ impl eframe::App for App {
                 if cfg!(target_os = "macos") {
                     rows.push(("Removable volume prompt", "choose Allow: that is the unit"));
                 }
-                let step = if rows.len() > 5 { 21.0 } else { 25.0 };
+                // a firmware whose MIDI name isn't recognised: the user says which port is the unit
+                let other = !st.other_midi.is_empty();
+                if other {
+                    rows.insert(1, ("Another firmware running", "CHOOSE ITS MIDI PORT"));
+                }
+                let step = if rows.len() > 5 { 105.0 / (rows.len() - 1) as f32 } else { 25.0 };
                 for (i, (a, b)) in rows.iter().enumerate() {
                     let y = 662.0 + i as f32 * step;
                     p.text(56.0, y, Align2::LEFT_CENTER, a, "tech", 15.5, LAV, 0.0);
-                    p.text(360.0, y, Align2::LEFT_CENTER, b, "tech", 15.5, INK, 0.0);
+                    if other && i == 1 {
+                        let w = p.measure(b, "tech", 15.5, 0.0);
+                        let r = board.r(350.0, y - step / 2.0, w + 20.0, step);
+                        let (c, h) = clicked("otherport", r);
+                        if h && active {
+                            painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(s, MINT), StrokeKind::Inside);
+                        }
+                        p.text(360.0, y, Align2::LEFT_CENTER, b, "tech", 15.5, MINT, 0.0);
+                        p.hline(360.0, 360.0 + w, y + 9.0, MINT);
+                        if c && active {
+                            if !st.other_midi.contains(&self.port_pick) {
+                                self.port_pick = st.other_midi[0].clone();
+                            }
+                            self.dialog = Dialog::Port;
+                        }
+                    } else {
+                        p.text(360.0, y, Align2::LEFT_CENTER, b, "tech", 15.5, INK, 0.0);
+                    }
                 }
             }
             (_, Mode::Backup) => {
@@ -659,6 +686,8 @@ impl App {
     fn dialogs(&mut self, ui: &egui::Ui, p: &Painter, st: &Shared, line: &str) {
         let (board, painter) = (p.b, p.p);
         let ctl = self.ctl.clone();
+        // lines to choose one of, under the text (the Port dialog's ports)
+        let mut choices: Vec<String> = vec![];
         // an alert from the controller wins over the user's dialogs
         let (title, body, keys): (&str, Vec<(String, Color32)>, Vec<(&str, u8)>) = if let Some((kind, text)) = &st.alert {
             let (t, c) = match kind {
@@ -718,6 +747,25 @@ impl App {
                     b.extend(ev.into_iter().map(|e| (format!("· {e}"), DIM)));
                     ("WHICH MODEL IS THIS?", b, vec![("CANCEL", 0), ("FM-1", 3), ("SMK-37", 4)])
                 }
+                Dialog::Port => {
+                    if st.other_midi.is_empty() || st.device.is_some() || st.midi.is_some() {
+                        self.dialog = Dialog::None;
+                        return;
+                    }
+                    // (the choice is never moved to another port: one unplugged stays chosen, and is refused)
+                    choices = st.other_midi.iter().take(8).cloned().collect();
+                    let more = st.other_midi.len() - choices.len();
+                    let mut b = vec![
+                        ("M-Flasher doesn't recognise a unit by these names. Choose the unit's port and M-Flasher sends it \
+                          the download-mode message, as DOWNLOAD MODE does: a firmware that knows it restarts into \
+                          download mode. Other devices are expected to ignore it.".into(), INK),
+                        ("Nothing is written. If no unit shows up in download mode within 20 s, use its keys instead.".into(), DIM),
+                    ];
+                    if more > 0 {
+                        b.push((format!("{more} more ports: `m-flasher find` lists them all."), DIM));
+                    }
+                    ("WHICH MIDI PORT IS THE UNIT?", b, vec![("CANCEL", 0), ("SEND MESSAGE", 9)])
+                }
             }
         };
         let screen = painter.clip_rect();
@@ -726,7 +774,8 @@ impl App {
         let fits = |l: &str| p.measure(l, "tech", 16.5, 0.2) <= 690.0;
         let wrapped: Vec<(String, Color32)> = body.into_iter().flat_map(|(t, c)| wrap(&t, &fits).into_iter().map(move |l| (l, c))).collect();
         let review = self.dialog == Dialog::Review && st.alert.is_none();
-        let h = 150.0 + wrapped.len() as f32 * 27.0 + if review { 66.0 } else { 0.0 };
+        let h = 150.0 + wrapped.len() as f32 * 27.0 + if review { 66.0 } else { 0.0 }
+            + if choices.is_empty() { 0.0 } else { 12.0 + choices.len() as f32 * 30.0 };
         let top = (H - h) / 2.0;
         let d = board.r(388.0, top, 760.0, h);
         p.vgrad(d, hex(0x302925), hex(0x241f1c));
@@ -743,10 +792,29 @@ impl App {
             p.text(420.0, y + 12.0, Align2::LEFT_CENTER, l, "tech", 16.5, *c, 0.2);
             y += 27.0;
         }
+        if !choices.is_empty() {
+            y += 12.0;
+        }
+        for name in &choices {
+            let r = board.r(420.0, y, 696.0, 28.0);
+            let resp = ui.interact(r, ui.id().with(("choice", name.as_str())), Sense::click());
+            let sel = *name == self.port_pick;
+            if resp.hovered() {
+                p.rect(r, hex(0x312a26));
+            }
+            if sel || resp.hovered() {
+                p.rect(board.r(420.0, y, 2.0, 28.0), MINT);
+            }
+            p.text_fit(432.0, y + 14.0, name, "plex", 16.0, 670.0, if sel { MINT } else { INK }, 0.0);
+            if resp.clicked() {
+                self.port_pick = name.clone();
+            }
+            y += 30.0;
+        }
         let mut x = 1116.0;
         for (label, code) in keys.iter().rev() {
             // the key we recommend: lit
-            let primary = matches!(code, 2 | 5);
+            let primary = matches!(code, 2 | 5 | 9);
             let w = if primary { 254.0 } else { (p.measure(label, "cond", 22.0, 1.6) + 48.0).max(150.0) };
             x -= w;
             let r = board.r(x, top + h - 78.0, w, 52.0);
@@ -769,6 +837,7 @@ impl App {
                         6 => {
                             ctl.answer_boot_suggestion(false);
                         }
+                        9 => ctl.enter_download_mode_by(self.port_pick.clone()),
                         _ => {}
                     }
                     self.dialog = Dialog::None;

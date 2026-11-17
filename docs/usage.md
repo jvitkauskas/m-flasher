@@ -70,7 +70,13 @@ when the firmware does not. To enter it:
   MIDI and offers **DOWNLOAD MODE**, which restarts it into download mode
   with a MIDI message (`m-flasher download-mode` on the command line). This
   works with M-VAVE's own firmware (FM-1 015, SMK-37 Pro and Elite 016) and
-  Felucca, whichever bootloader the unit has;
+  Felucca, whichever bootloader the unit has. Firmwares built on them often
+  know the message too, but name their MIDI port differently, so M-Flasher
+  doesn't recognise them: under HOW TO CONNECT, **CHOOSE ITS MIDI PORT**
+  lists the other MIDI ports, and the one you choose is sent the message
+  (`m-flasher download-mode --port NAME`; `m-flasher find` lists the ports).
+  Only the unit showing up in download mode confirms it; until M-Flasher
+  closes, that port then counts as a unit;
 - with m-bootloader: hold **REC** (SMK-37: **SEQ REC**) while switching the
   unit on;
 - with Felucca, SLOOP or Snoop37 running: hold **OCT-** and **OCT+** for 5 s;
@@ -163,6 +169,7 @@ The same executable is a command-line tool when given arguments:
 ```sh
 m-flasher find                 # the units in download mode (and those running, on USB MIDI)
 m-flasher download-mode        # switch a running unit to download mode over USB MIDI
+m-flasher download-mode --port NAME   # the same, for a port whose name isn't recognised
 m-flasher restart              # leave download mode: the unit resets and starts its firmware
 m-flasher info                 # what is on the unit
 m-flasher backup [DIR]
