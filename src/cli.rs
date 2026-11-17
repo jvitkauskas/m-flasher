@@ -15,11 +15,12 @@ use crate::scsi::{Device, ScsiError, find_devices};
 use std::io::Write;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: m-flasher [find | download-mode | restart | info | backup [DIR] | restore BACKUP.bin [--keep-bootloader] |
+const USAGE: &str = "usage: m-flasher [find | download-mode [--port NAME] | restart | info | backup [DIR] | restore BACKUP.bin [--keep-bootloader] |
                  firmware PACKAGE.fwsc |
                  bootloader [--stock PACKAGE.fwsc | --file UBOOT.boot] |
                  run-ram IMAGE --addr ADDR [--call OPCODE]... [--read ADDR:LEN -o OUT]]
        options: --device PATH  --board fm1|smk37  --backup-dir DIR  --yes
+                --port NAME (download-mode: the unit's MIDI port, when its name isn't recognised)
                 --restart (restore, firmware, bootloader: start the unit when written)
        without arguments: the window (`m-flasher run-ram --help`: the run-ram command)";
 
@@ -89,19 +90,32 @@ fn read(path: &str) -> Result<Vec<u8>, Error> {
     std::fs::read(path).map_err(|e| Error::Io(format!("cannot read {path}: {e}")))
 }
 
-/// Send the soft key to the one unit on USB MIDI and wait for it to come
-/// back in download mode.
-fn download_mode() -> Result<(), Error> {
+/// Send the soft key to the one unit on USB MIDI, or to the port the user
+/// named, and wait for it to come back in download mode.
+fn download_mode(port: Option<String>) -> Result<(), Error> {
     if !find_devices().is_empty() {
         println!("A unit is already in download mode");
         return Ok(());
     }
-    let units = crate::midi::find_units();
-    let unit = match units.len() {
-        0 if crate::scsi::needs_sg_driver() => return Err(Error::Refused(SG_DRIVER.into())),
-        0 => return Err(Error::Refused("no FM-1 or SMK-37 found on USB MIDI: is it switched on and connected?".into())),
-        1 => &units[0],
-        _ => return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into())),
+    let (unit, chosen) = match port {
+        Some(name) => (crate::midi::port_named(&name).map_err(Error::Refused)?, true),
+        None => {
+            let mut units = crate::midi::find_units();
+            match units.len() {
+                0 if crate::scsi::needs_sg_driver() => return Err(Error::Refused(SG_DRIVER.into())),
+                0 => {
+                    let others: Vec<String> = crate::midi::other_ports().into_iter().map(|u| format!("\"{}\"", u.name)).collect();
+                    return Err(Error::Refused(if others.is_empty() {
+                        "no FM-1 or SMK-37 found on USB MIDI: is it switched on and connected?".into()
+                    } else {
+                        format!("no FM-1 or SMK-37 recognised on USB MIDI. If the unit runs a firmware that names its \
+                                 port otherwise, name the port: --port NAME. Other MIDI ports: {}", others.join(", "))
+                    }));
+                }
+                1 => (units.remove(0), false),
+                _ => return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into())),
+            }
+        }
     };
     unit.soft_key().map_err(Error::Io)?;
     println!("Sent the {} the download-mode message over USB MIDI; waiting for it", unit.name);
@@ -116,9 +130,9 @@ fn download_mode() -> Result<(), Error> {
         }
     }
     Err(Error::Refused(format!(
-        "the {} did not come back in download mode within 20 s: its firmware may not know the soft key; \
-         use its keys instead (see the window's HOW TO CONNECT)",
-        unit.name
+        "the {} did not come back in download mode within 20 s: {}; use its keys instead (see the window's HOW TO CONNECT)",
+        unit.name,
+        if chosen { "it may not be a unit, or its firmware may not know the message" } else { "its firmware may not know the soft key" }
     )))
 }
 
@@ -275,6 +289,7 @@ fn main(args: Vec<String>) -> Result<(), Error> {
     let (mut pos, mut device, mut board, mut backup_dir, mut yes) = (vec![], None, None, default_backup_dir(), false);
     let (mut stock, mut file, mut then_restart) = (None, None, false);
     let mut keep_boot = false;
+    let mut port: Option<String> = None;
     let (mut ram_addr, mut calls, mut read_spec, mut output) = (None, vec![], None, None);
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
@@ -282,6 +297,7 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         match a.as_str() {
             "--device" => device = Some(val("--device")?),
             "--board" => board = Some(val("--board")?),
+            "--port" => port = Some(val("--port")?),
             "--backup-dir" => backup_dir = PathBuf::from(val("--backup-dir")?),
             "--stock" => stock = Some(val("--stock")?),
             "--file" => file = Some(val("--file")?),
@@ -323,12 +339,21 @@ fn main(args: Vec<String>) -> Result<(), Error> {
     if keep_boot && cmd != "restore" {
         return Err(Error::Refused(format!("--keep-bootloader is for restore\n{USAGE}")));
     }
+    if port.is_some() && cmd != "download-mode" {
+        return Err(Error::Refused(format!("--port is for download-mode\n{USAGE}")));
+    }
     if cmd == "find" {
         for (p, d) in find_devices() {
             println!("{p}\t{d}");
         }
-        for u in crate::midi::find_units() {
+        let units = crate::midi::find_units();
+        for u in &units {
             println!("midi\t{} (running; download-mode switches it)", u.name);
+        }
+        if units.is_empty() && find_devices().is_empty() {
+            for u in crate::midi::other_ports() {
+                println!("midi?\t{} (not recognised; if it is the unit: download-mode --port \"{}\")", u.name, u.name);
+            }
         }
         if crate::scsi::needs_sg_driver() {
             eprintln!("{SG_DRIVER}");
@@ -336,7 +361,7 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         return Ok(());
     }
     if cmd == "download-mode" {
-        return download_mode();
+        return download_mode(port);
     }
     if cmd == "restart" {
         if find_devices().is_empty() {

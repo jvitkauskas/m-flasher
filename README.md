@@ -40,7 +40,8 @@ the unit is broken. For Windows, macOS and Linux.
 2. Put the unit in **download mode** and connect it with a USB data cable:
    - with the unit running normally (M-VAVE's firmware or Felucca), just
      connect it: M-Flasher finds it on USB MIDI and its **DOWNLOAD MODE**
-     button switches it over;
+     button switches it over. Another firmware that knows the same message
+     but names its port differently: **CHOOSE ITS MIDI PORT**;
    - with m-bootloader: hold **REC** (SMK-37: **SEQ REC**) while
      switching it on;
    - with Felucca, SLOOP or Snoop37 running: hold **OCT-** and **OCT+** for 5 s.

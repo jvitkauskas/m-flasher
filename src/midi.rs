@@ -12,34 +12,109 @@
 //! that the program needs no ALSA library; without a sequencer, to the raw-MIDI
 //! device (`/dev/snd/midiC<card>D0`, port 0). Windows and macOS go through
 //! midir (WinMM, CoreMIDI).
+//!
+//! A firmware that names its port otherwise is not recognised by its name: the
+//! user can choose its port (the window's list of other MIDI ports, or
+//! `download-mode --port NAME`), and only the unit showing up in download mode
+//! afterwards says that it was one. A port chosen that way is taken for a unit
+//! until the program ends.
 
 pub const SOFT_KEY: [u8; 6] = [0xF0, 0x22, 0x24, 0x35, 0x7D, 0xF7];
 
 /// Names under which the units appear on USB MIDI, each unit with the
-/// spellings its name may take. Nothing else is ever sent the soft key.
+/// spellings its name may take. Nothing else is sent the soft key unless the
+/// user chooses the port.
 const NAMES: [(&str, &[&str]); 3] =
     [("FM-1", &["FM-1", "FM1", "MiniFM"]), ("SMK-37", &["SMK-37", "SMK37"]), ("Felucca", &["Felucca"])];
 
-/// A unit found on USB MIDI.
+/// Ports the user chose that then showed up in download mode (lowercase):
+/// taken for units, under their own names, until the program ends.
+static CHOSEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// A unit found on USB MIDI, or a port the user may choose as one.
 pub struct MidiUnit {
     /// As the system names it: "SMK-37 Elite", "FM-1", ...
     pub name: String,
     port: sys::Port,
 }
 
-/// Which unit a MIDI name is, if any.
-fn unit_of(name: &str) -> Option<&'static str> {
+/// Which unit a MIDI name is, if any: one of NAMES, or a port chosen before
+/// (its own name).
+fn unit_of(name: &str) -> Option<String> {
     let n = name.to_ascii_lowercase();
-    NAMES.iter().find(|(_, spellings)| spellings.iter().any(|k| n.contains(&k.to_ascii_lowercase()))).map(|(unit, _)| *unit)
+    NAMES
+        .iter()
+        .find(|(_, spellings)| spellings.iter().any(|k| n.contains(&k.to_ascii_lowercase())))
+        .map(|(unit, _)| unit.to_string())
+        .or_else(|| CHOSEN.lock().unwrap_or_else(|e| e.into_inner()).contains(&n).then_some(n))
 }
 
 fn known(name: &str) -> bool {
     unit_of(name).is_some()
 }
 
+/// Ports that are never a unit: the systems' own synthesizers and virtual
+/// buses, and on Windows a device's other ports ("MIDIOUT2 (...)"), listed
+/// with its first.
+fn not_a_unit(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    ["microsoft gs wavetable", "iac driver", "network session", "midi through"].iter().any(|k| n.contains(k))
+        || n.strip_prefix("midiout").is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()) && r.contains(" ("))
+}
+
 /// The units on USB MIDI, each by its first port.
 pub fn find_units() -> Vec<MidiUnit> {
-    sys::units().into_iter().map(|(name, port)| MidiUnit { name, port }).collect()
+    let all = sys::ports();
+    let names: Vec<String> = all.iter().map(|(n, _)| n.clone()).collect();
+    // Linux lists each sound card once, by its name: every card is a unit of its own
+    let units: Vec<usize> = if cfg!(target_os = "linux") {
+        (0..names.len()).filter(|&i| known(&names[i])).collect()
+    } else {
+        first_ports(&names)
+    };
+    all.into_iter()
+        .enumerate()
+        .filter(|(i, _)| units.contains(i))
+        .map(|(_, (name, port))| MidiUnit { name, port })
+        .collect()
+}
+
+/// The MIDI output ports not taken for a unit, which the user may choose as
+/// one: a firmware that names its port otherwise.
+pub fn other_ports() -> Vec<MidiUnit> {
+    sys::ports()
+        .into_iter()
+        .filter(|(name, _)| !known(name) && !not_a_unit(name))
+        .map(|(name, port)| MidiUnit { name, port })
+        .collect()
+}
+
+/// The port the user named: the one called exactly that (letter case aside),
+/// else the only one whose name contains it.
+pub fn port_named(name: &str) -> Result<MidiUnit, String> {
+    let want = name.to_ascii_lowercase();
+    let mut all: Vec<MidiUnit> = sys::ports().into_iter().map(|(name, port)| MidiUnit { name, port }).collect();
+    if let Some(i) = all.iter().position(|u| u.name.to_ascii_lowercase() == want) {
+        return Ok(all.swap_remove(i));
+    }
+    let listed = || all.iter().map(|u| format!("\"{}\"", u.name)).collect::<Vec<_>>().join(", ");
+    let found: Vec<usize> = (0..all.len()).filter(|&i| all[i].name.to_ascii_lowercase().contains(&want)).collect();
+    match found.as_slice() {
+        [i] => Ok(all.swap_remove(*i)),
+        [] if all.is_empty() => Err("no MIDI output port found".into()),
+        [] => Err(format!("no MIDI output port is called \"{name}\"; the ports: {}", listed())),
+        _ => Err(format!("more than one MIDI output port matches \"{name}\": give its whole name; the ports: {}", listed())),
+    }
+}
+
+/// Take this port for a unit from now on (it showed up in download mode when
+/// sent the soft key).
+pub fn remember(name: &str) {
+    let n = name.to_ascii_lowercase();
+    let mut chosen = CHOSEN.lock().unwrap_or_else(|e| e.into_inner());
+    if !chosen.contains(&n) {
+        chosen.push(n);
+    }
 }
 
 impl MidiUnit {
@@ -56,7 +131,7 @@ impl MidiUnit {
 /// "MIDIOUT2 (...)", ...), and only that one answers the soft key.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 fn first_ports(names: &[String]) -> Vec<usize> {
-    let mut chosen: Vec<(&str, usize, u8)> = vec![];
+    let mut chosen: Vec<(String, usize, u8)> = vec![];
     for (i, name) in names.iter().enumerate() {
         let Some(unit) = unit_of(name) else {
             continue;
@@ -78,7 +153,8 @@ fn first_ports(names: &[String]) -> Vec<usize> {
     chosen.into_iter().map(|c| c.1).collect()
 }
 
-/// The sound cards in /proc/asound/cards: (number, name).
+/// The USB sound cards in /proc/asound/cards: (number, name). The units are
+/// USB devices: the computer's own sound and virtual MIDI are left out.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn asound_cards(text: &str) -> Vec<(u32, String)> {
     // " 3 [SMK37Elite     ]: USB-Audio - SMK-37 Elite"
@@ -86,8 +162,8 @@ fn asound_cards(text: &str) -> Vec<(u32, String)> {
         .filter_map(|l| {
             let (num, rest) = l.trim_start().split_once(' ')?;
             let n = num.parse().ok()?;
-            let name = rest.split_once("]: ")?.1;
-            Some((n, name.split_once(" - ").map(|(_, n)| n).unwrap_or(name).trim().to_string()))
+            let (driver, name) = rest.split_once("]: ")?.1.split_once(" - ")?;
+            (driver.trim() == "USB-Audio").then(|| (n, name.trim().to_string()))
         })
         .collect()
 }
@@ -104,11 +180,12 @@ mod sys {
         name: String,
     }
 
-    pub fn units() -> Vec<(String, Port)> {
+    /// The USB sound cards with MIDI, each by its first port.
+    pub fn ports() -> Vec<(String, Port)> {
         let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
         super::asound_cards(&cards)
             .into_iter()
-            .filter(|(n, name)| super::known(name) && std::path::Path::new(&format!("/dev/snd/midiC{n}D0")).exists())
+            .filter(|(n, _)| std::path::Path::new(&format!("/dev/snd/midiC{n}D0")).exists())
             .map(|(card, name)| (name.clone(), Port { card: card as i32, name }))
             .collect()
     }
@@ -383,16 +460,15 @@ mod sys {
         static LISTER: std::cell::RefCell<Option<MidiOutput>> = const { std::cell::RefCell::new(None) };
     }
 
-    pub fn units() -> Vec<(String, Port)> {
+    /// Every MIDI output port.
+    pub fn ports() -> Vec<(String, Port)> {
         LISTER.with_borrow_mut(|lister| {
             if lister.is_none() {
                 *lister = MidiOutput::new("M-Flasher").ok();
             }
             let Some(out) = lister.as_ref() else { return vec![] };
             refresh();
-            let ports = out.ports();
-            let names: Vec<String> = ports.iter().map(|p| out.port_name(p).unwrap_or_default()).collect();
-            super::first_ports(&names).into_iter().map(|i| (names[i].clone(), Port(ports[i].clone()))).collect()
+            out.ports().into_iter().map(|p| (out.port_name(&p).unwrap_or_default(), Port(p))).collect()
         })
     }
 
@@ -408,7 +484,7 @@ mod sys {
 #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 mod sys {
     pub struct Port;
-    pub fn units() -> Vec<(String, Port)> {
+    pub fn ports() -> Vec<(String, Port)> {
         vec![]
     }
     pub fn send(_: &Port, _: &[u8]) -> Result<(), String> {
@@ -445,7 +521,7 @@ mod tests {
     fn proc_asound_cards() {
         let t = " 0 [PCH            ]: HDA-Intel - HDA Intel PCH\n                      HDA Intel PCH at 0xf7f10000 irq 32\n \
                  3 [SMK37Elite     ]: USB-Audio - SMK-37 Elite\n                      M-VAVE SMK-37 Elite at usb-0000:00:14.0-2, full speed\n";
-        assert_eq!(asound_cards(t), vec![(0, "HDA Intel PCH".to_string()), (3, "SMK-37 Elite".to_string())]);
+        assert_eq!(asound_cards(t), vec![(3, "SMK-37 Elite".to_string())], "USB cards only");
         assert!(known("SMK-37 Elite") && known("FM-1") && known("Felucca Update") && !known("HDA Intel PCH"));
         assert!(known("SMK37 Pro") && known("FM1_MONITOR") && known("MIDIMON FM-1"));
         assert!(known("MiniFM") && known("MiniFM Midi"));
@@ -464,6 +540,23 @@ mod tests {
             Ok(()) => {}
             Err(e) => panic!("{e}"),
         }
+    }
+
+    #[test]
+    fn other_ports_leave_out_the_systems_own() {
+        assert!(not_a_unit("Microsoft GS Wavetable Synth") && not_a_unit("IAC Driver Bus 1"));
+        assert!(not_a_unit("Network Session 1") && not_a_unit("Midi Through Port-0"));
+        assert!(not_a_unit("MIDIOUT2 (Caravel)") && !not_a_unit("Caravel") && !not_a_unit("MIDIOUT Box"));
+    }
+
+    #[test]
+    fn a_port_chosen_and_seen_in_download_mode_is_a_unit() {
+        assert!(!known("Some Firmware MIDI 1"));
+        remember("Some Firmware MIDI 1");
+        assert!(known("some firmware midi 1") && !known("Some Firmware MIDI 2"));
+        // two chosen ports stay two units, each by its own name
+        remember("Other Firmware");
+        assert_eq!(first_ports(&names(&["Some Firmware MIDI 1", "Launchpad", "Other Firmware"])), vec![0, 2]);
     }
 
     #[test]

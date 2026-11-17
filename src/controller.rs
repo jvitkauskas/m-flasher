@@ -143,6 +143,10 @@ pub struct Shared {
     /// A unit running normally, found on USB MIDI (its name), while none is in
     /// download mode: the soft key can switch it.
     pub midi: Option<String>,
+    /// With no unit found, in download mode or on USB MIDI: the MIDI ports
+    /// the user may choose as the unit's (a firmware that names its port
+    /// otherwise).
+    pub other_midi: Vec<String>,
     /// Recommend m-bootloader to the user (the unit has the stock bootloader):
     /// the key that opens its recovery menu.
     pub suggest_boot: Option<&'static str>,
@@ -225,6 +229,7 @@ impl Controller {
                 keep_boot: false,
                 boot_source: BootSource::Open,
                 midi: None,
+                other_midi: vec![],
                 suggest_boot: None,
             })),
             unit: Arc::new(Mutex::new(None)),
@@ -349,8 +354,18 @@ impl Controller {
                     (None, true) => crate::midi::find_units().into_iter().next().map(|u| u.name),
                     _ => None,
                 };
-                if self.shared.lock().unwrap().midi != midi {
-                    self.with(|s| s.midi = midi);
+                let others: Vec<String> = match (&connected, devs.is_empty(), &midi) {
+                    (None, true, None) => crate::midi::other_ports().into_iter().map(|u| u.name).collect(),
+                    _ => vec![],
+                };
+                let st = self.shared.lock().unwrap();
+                let changed = st.midi != midi || st.other_midi != others;
+                drop(st);
+                if changed {
+                    self.with(|s| {
+                        s.midi = midi;
+                        s.other_midi = others;
+                    });
                 }
             }
             std::thread::sleep(Duration::from_millis(1500));
@@ -382,33 +397,57 @@ impl Controller {
     /// scan then finds and connects it.
     pub fn enter_download_mode(&self) {
         self.work("switching to download mode", |c| {
-            let units = crate::midi::find_units();
+            let mut units = crate::midi::find_units();
             let unit = match units.len() {
                 0 => return Err(Error::Refused("the unit is no longer on USB MIDI".into())),
-                1 => &units[0],
+                1 => units.remove(0),
                 _ => return Err(Error::Refused("more than one unit on USB MIDI: connect only one".into())),
             };
-            unit.soft_key().map_err(Error::Io)?;
-            c.log(format!("Sent the {} the download-mode message over USB MIDI; waiting for it", unit.name));
-            c.with(|s| s.midi = None);
-            // (the scan is paused while this runs: it connects once we return)
-            for _ in 0..40 {
-                std::thread::sleep(Duration::from_millis(500));
-                if !find_devices().is_empty() {
-                    return Ok(());
-                }
-                // back, but not to be seen without the driver
-                if crate::scsi::needs_sg_driver() {
-                    c.sg_missing.store(true, Ordering::SeqCst);
-                    return Err(Error::Refused(crate::scsi::SG_DRIVER.into()));
-                }
-            }
-            Err(Error::Refused(format!(
-                "the {} did not come back in download mode within 20 s: its firmware may not know the message; \
-                 use its keys instead",
-                unit.name
-            )))
+            c.soft_key(unit, false)
         });
+    }
+
+    /// Send the soft key to a MIDI port the user chose as the unit's (its
+    /// name isn't recognised). Only the unit showing up in download mode says
+    /// that it was one: the port is then taken for a unit until M-Flasher closes.
+    pub fn enter_download_mode_by(&self, port: String) {
+        self.work("switching to download mode", move |c| {
+            let unit = crate::midi::port_named(&port).map_err(Error::Refused)?;
+            c.log(format!("The MIDI port \"{}\" was chosen as the unit's", unit.name));
+            c.soft_key(unit, true)
+        });
+    }
+
+    /// Send the soft key and wait up to 20 s for the unit in download mode.
+    fn soft_key(&self, unit: crate::midi::MidiUnit, chosen: bool) -> Result<(), Error> {
+        unit.soft_key().map_err(Error::Io)?;
+        self.log(format!("Sent the {} the download-mode message over USB MIDI; waiting for it", unit.name));
+        self.with(|s| {
+            s.midi = None;
+            s.other_midi.clear();
+        });
+        // (the scan is paused while this runs: it connects once we return)
+        for _ in 0..40 {
+            std::thread::sleep(Duration::from_millis(500));
+            if !find_devices().is_empty() {
+                if chosen {
+                    crate::midi::remember(&unit.name);
+                }
+                return Ok(());
+            }
+            // back, but not to be seen without the driver
+            if crate::scsi::needs_sg_driver() {
+                self.sg_missing.store(true, Ordering::SeqCst);
+                return Err(Error::Refused(crate::scsi::SG_DRIVER.into()));
+            }
+        }
+        Err(Error::Refused(if chosen {
+            format!("nothing came back in download mode within 20 s of sending \"{}\" the message: it may not be \
+                     the unit, or its firmware may not know the message; use the unit's keys instead", unit.name)
+        } else {
+            format!("the {} did not come back in download mode within 20 s: its firmware may not know the message; \
+                     use its keys instead", unit.name)
+        }))
     }
 
     fn drop_unit(&self) {
