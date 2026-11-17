@@ -358,13 +358,16 @@ impl Controller {
                     (None, true, None) => crate::midi::other_ports().into_iter().map(|u| u.name).collect(),
                     _ => vec![],
                 };
+                // (a work may have started while the ports were listed: it has cleared them)
                 let st = self.shared.lock().unwrap();
-                let changed = st.midi != midi || st.other_midi != others;
+                let changed = !st.busy && (st.midi != midi || st.other_midi != others);
                 drop(st);
                 if changed {
                     self.with(|s| {
-                        s.midi = midi;
-                        s.other_midi = others;
+                        if !s.busy {
+                            s.midi = midi;
+                            s.other_midi = others;
+                        }
                     });
                 }
             }
@@ -412,7 +415,7 @@ impl Controller {
     /// that it was one: the port is then taken for a unit until M-Flasher closes.
     pub fn enter_download_mode_by(&self, port: String) {
         self.work("switching to download mode", move |c| {
-            let unit = crate::midi::port_named(&port).map_err(Error::Refused)?;
+            let unit = crate::midi::port_named(&port, true).map_err(Error::Refused)?;
             c.log(format!("The MIDI port \"{}\" was chosen as the unit's", unit.name));
             c.soft_key(unit, true)
         });

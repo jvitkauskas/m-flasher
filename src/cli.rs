@@ -98,7 +98,7 @@ fn download_mode(port: Option<String>) -> Result<(), Error> {
         return Ok(());
     }
     let (unit, chosen) = match port {
-        Some(name) => (crate::midi::port_named(&name).map_err(Error::Refused)?, true),
+        Some(name) => (crate::midi::port_named(&name, false).map_err(Error::Refused)?, true),
         None => {
             let mut units = crate::midi::find_units();
             match units.len() {
@@ -346,14 +346,11 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         for (p, d) in find_devices() {
             println!("{p}\t{d}");
         }
-        let units = crate::midi::find_units();
-        for u in &units {
+        for u in crate::midi::find_units() {
             println!("midi\t{} (running; download-mode switches it)", u.name);
         }
-        if units.is_empty() && find_devices().is_empty() {
-            for u in crate::midi::other_ports() {
-                println!("midi?\t{} (not recognised; if it is the unit: download-mode --port \"{}\")", u.name, u.name);
-            }
+        for u in crate::midi::other_ports() {
+            println!("midi?\t{} (not recognised; if it is the unit: download-mode --port \"{}\")", u.name, u.name);
         }
         if crate::scsi::needs_sg_driver() {
             eprintln!("{SG_DRIVER}");

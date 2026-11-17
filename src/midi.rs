@@ -89,21 +89,29 @@ pub fn other_ports() -> Vec<MidiUnit> {
         .collect()
 }
 
-/// The port the user named: the one called exactly that (letter case aside),
-/// else the only one whose name contains it.
-pub fn port_named(name: &str) -> Result<MidiUnit, String> {
-    let want = name.to_ascii_lowercase();
-    let mut all: Vec<MidiUnit> = sys::ports().into_iter().map(|(name, port)| MidiUnit { name, port }).collect();
-    if let Some(i) = all.iter().position(|u| u.name.to_ascii_lowercase() == want) {
-        return Ok(all.swap_remove(i));
+/// The port the user named: the one called exactly that (letter case
+/// aside), else, unless `exact`, the only one whose name contains it. Refused
+/// when two ports are called the same: which device each is can't be told.
+pub fn port_named(name: &str, exact: bool) -> Result<MidiUnit, String> {
+    let want = name.trim().to_ascii_lowercase();
+    if want.is_empty() {
+        return Err("no MIDI port named: give its name".into());
     }
-    let listed = || all.iter().map(|u| format!("\"{}\"", u.name)).collect::<Vec<_>>().join(", ");
-    let found: Vec<usize> = (0..all.len()).filter(|&i| all[i].name.to_ascii_lowercase().contains(&want)).collect();
+    let mut all: Vec<MidiUnit> = sys::ports().into_iter().map(|(name, port)| MidiUnit { name, port }).collect();
+    let listed = |all: &[MidiUnit]| all.iter().map(|u| format!("\"{}\"", u.name)).collect::<Vec<_>>().join(", ");
+    let same: Vec<usize> = (0..all.len()).filter(|&i| all[i].name.to_ascii_lowercase() == want).collect();
+    let found: Vec<usize> = if same.is_empty() && !exact {
+        (0..all.len()).filter(|&i| all[i].name.to_ascii_lowercase().contains(&want)).collect()
+    } else {
+        same.clone()
+    };
     match found.as_slice() {
         [i] => Ok(all.swap_remove(*i)),
         [] if all.is_empty() => Err("no MIDI output port found".into()),
-        [] => Err(format!("no MIDI output port is called \"{name}\"; the ports: {}", listed())),
-        _ => Err(format!("more than one MIDI output port matches \"{name}\": give its whole name; the ports: {}", listed())),
+        [] if exact => Err(format!("the MIDI port \"{name}\" is no longer connected")),
+        [] => Err(format!("no MIDI output port is called \"{name}\"; the ports: {}", listed(&all))),
+        _ if !same.is_empty() => Err(format!("{} MIDI output ports are called \"{name}\": connect only the unit", found.len())),
+        _ => Err(format!("more than one MIDI output port matches \"{name}\": give its whole name; the ports: {}", listed(&all))),
     }
 }
 
@@ -557,6 +565,11 @@ mod tests {
         // two chosen ports stay two units, each by its own name
         remember("Other Firmware");
         assert_eq!(first_ports(&names(&["Some Firmware MIDI 1", "Launchpad", "Other Firmware"])), vec![0, 2]);
+    }
+
+    #[test]
+    fn a_port_is_named_by_something() {
+        assert!(port_named("", false).is_err() && port_named("  ", true).is_err());
     }
 
     #[test]

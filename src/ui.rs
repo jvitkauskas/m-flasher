@@ -752,16 +752,19 @@ impl App {
                         self.dialog = Dialog::None;
                         return;
                     }
-                    choices = st.other_midi.clone();
-                    if !choices.contains(&self.port_pick) {
-                        self.port_pick = choices[0].clone();
-                    }
-                    ("WHICH MIDI PORT IS THE UNIT?", vec![
+                    // (the choice is never moved to another port: one unplugged stays chosen, and is refused)
+                    choices = st.other_midi.iter().take(8).cloned().collect();
+                    let more = st.other_midi.len() - choices.len();
+                    let mut b = vec![
                         ("M-Flasher doesn't recognise a unit by these names. Choose the unit's port and M-Flasher sends it \
                           the download-mode message, as DOWNLOAD MODE does: a firmware that knows it restarts into \
                           download mode. Other devices are expected to ignore it.".into(), INK),
                         ("Nothing is written. If no unit shows up in download mode within 20 s, use its keys instead.".into(), DIM),
-                    ], vec![("CANCEL", 0), ("SEND MESSAGE", 9)])
+                    ];
+                    if more > 0 {
+                        b.push((format!("{more} more ports: `m-flasher find` lists them all."), DIM));
+                    }
+                    ("WHICH MIDI PORT IS THE UNIT?", b, vec![("CANCEL", 0), ("SEND MESSAGE", 9)])
                 }
             }
         };
