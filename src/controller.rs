@@ -198,10 +198,31 @@ fn now() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
+fn picker_directory(kind: FileKind, previous: Option<PathBuf>, backup_dir: PathBuf, home: Option<PathBuf>) -> Option<PathBuf> {
+    previous.and_then(|p| p.parent().map(PathBuf::from)).filter(|p| p.is_dir())
+        .or_else(|| (kind == FileKind::Restore).then_some(backup_dir).filter(|p| p.is_dir()))
+        .or_else(|| home.as_ref().map(|p| p.join("Downloads")).filter(|p| p.is_dir()))
+        .or(home)
+}
+
 #[cfg(test)]
 mod picker_tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn missing_previous_restore_folder_falls_back_to_backups() {
+        let root = std::env::temp_dir().join(format!("m-flasher-picker-{}", std::process::id()));
+        let backups = root.join("backups");
+        let downloads = root.join("Downloads");
+        std::fs::create_dir_all(&backups).unwrap();
+        std::fs::create_dir_all(&downloads).unwrap();
+        let directory = |kind, previous| picker_directory(kind, Some(previous), backups.clone(), Some(root.clone()));
+        assert_eq!(directory(FileKind::Restore, root.join("removed-drive/old.bin")), Some(backups.clone()));
+        assert_eq!(directory(FileKind::Restore, downloads.join("old.bin")), Some(downloads.clone()));
+        assert_eq!(directory(FileKind::Firmware, root.join("removed-drive/old.fwsc")), Some(downloads));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn wait_closed(c: &Controller) {
         let start = std::time::Instant::now();
@@ -761,11 +782,7 @@ impl Controller {
             // our own selection, otherwise start in a useful existing folder.
             // All filesystem checks stay off the UI thread.
             let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
-            let dir = previous.and_then(|p| p.parent().map(PathBuf::from))
-                .or_else(|| (kind == FileKind::Restore).then_some(backup_dir))
-                .filter(|p| p.is_dir())
-                .or_else(|| home.as_ref().map(|p| p.join("Downloads")).filter(|p| p.is_dir()))
-                .or(home);
+            let dir = picker_directory(kind, previous, backup_dir, home);
             let d = if let Some(dir) = dir { dialog.set_directory(dir) } else { dialog };
             let d = match kind {
                 FileKind::Restore => d.set_title("Choose a backup").add_filter("Flash backups", &["bin"]),
