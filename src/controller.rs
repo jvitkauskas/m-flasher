@@ -184,7 +184,7 @@ pub struct Controller {
     /// the plan was made from: a plan from older choices is never written.
     choices: Arc<AtomicU64>,
     planned: Arc<AtomicU64>,
-    /// The file dialogs open: no write starts while a file is being chosen.
+    /// One while a file dialog is opening or open: no second picker or write.
     picking: Arc<AtomicU64>,
     ctx: egui::Context,
 }
@@ -198,11 +198,69 @@ fn now() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn wait_closed(c: &Controller) {
+        let start = std::time::Instant::now();
+        while c.picking() {
+            assert!(start.elapsed() < Duration::from_secs(5), "picker did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn slow_picker_rejects_repeat_clicks_then_allows_retry_after_cancel() {
+        let c = Controller::idle(egui::Context::default());
+        let (started_tx, started_rx) = mpsc::channel();
+        let (close_tx, close_rx) = mpsc::channel();
+        c.pick_file_with(FileKind::Firmware, rfd::FileDialog::new(), move |_| {
+            started_tx.send(()).unwrap();
+            close_rx.recv().unwrap();
+            None
+        });
+        assert!(c.picking(), "disabled before the worker starts");
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        for _ in 0..20 {
+            c.pick_file_with(FileKind::Restore, rfd::FileDialog::new(), |_| panic!("duplicate picker"));
+        }
+        // Snapshotting and changing state still work while the picker waits.
+        assert!(!c.snapshot().busy);
+        assert!(c.snapshot().files.is_empty());
+        close_tx.send(()).unwrap();
+        wait_closed(&c);
+        assert!(c.snapshot().files.is_empty(), "cancel preserves the choice");
+        c.pick_file_with(FileKind::Firmware, rfd::FileDialog::new(), |_| Some(PathBuf::from("test.fwsc")));
+        wait_closed(&c);
+        assert_eq!(c.snapshot().file(FileKind::Firmware).as_deref(), Some("test.fwsc"));
+    }
+
+    #[test]
+    fn picker_cannot_open_during_device_work() {
+        let c = Controller::idle(egui::Context::default());
+        c.with(|s| s.busy = true);
+        c.pick_file_with(FileKind::Firmware, rfd::FileDialog::new(), |_| panic!("picker during work"));
+        assert!(!c.picking());
+    }
+}
+
 impl Controller {
     pub fn new(ctx: egui::Context) -> Controller {
+        let c = Self::idle(ctx);
+        let open_version = c.snapshot().open_version;
+        c.log(format!("M-Flasher {} started · m-bootloader {open_version} bundled", env!("CARGO_PKG_VERSION")));
+        c.refresh_backups();
+        let scanner = c.clone();
+        std::thread::spawn(move || scanner.scan_loop());
+        c
+    }
+
+    fn idle(ctx: egui::Context) -> Controller {
         let open_version = bundled_bootloader(BOARDS[1]).map(|(_, v)| v).unwrap_or_else(|_| "?".into());
         let backup_dir = default_backup_dir();
-        let c = Controller {
+        Controller {
             shared: Arc::new(Mutex::new(Shared {
                 phase: Phase::Waiting,
                 busy: false,
@@ -237,12 +295,7 @@ impl Controller {
             planned: Arc::new(AtomicU64::new(0)),
             picking: Arc::new(AtomicU64::new(0)),
             ctx,
-        };
-        c.log(format!("M-Flasher {} started · m-bootloader {open_version} bundled", env!("CARGO_PKG_VERSION")));
-        c.refresh_backups();
-        let scanner = c.clone();
-        std::thread::spawn(move || scanner.scan_loop());
-        c
+        }
     }
 
     pub fn snapshot(&self) -> Shared {
@@ -681,23 +734,46 @@ impl Controller {
         }
     }
 
-    /// Opens a file dialog in a thread; the choice is planned when it returns.
-    pub fn choose_file(&self, kind: FileKind) {
+    pub fn picking(&self) -> bool {
+        self.picking.load(Ordering::SeqCst) != 0
+    }
+
+    /// Opens an owned file dialog in a thread; the choice is planned when it returns.
+    pub fn choose_file(&self, kind: FileKind, dialog: rfd::FileDialog) {
+        self.pick_file_with(kind, dialog, |d| d.pick_file());
+    }
+
+    fn pick_file_with(&self, kind: FileKind, dialog: rfd::FileDialog,
+                      pick: impl FnOnce(rfd::FileDialog) -> Option<PathBuf> + Send + 'static) {
         let c = self.clone();
-        // counted with the lock a write is admitted under, until the choice is in
-        let dir = self.with(|s| {
-            self.picking.fetch_add(1, Ordering::SeqCst);
-            s.backup_dir.clone()
+        // Claim before spawning, under the lock used to admit writes. Rapid
+        // clicks cannot queue more dialogs, including while the shell is loading.
+        let choice = self.with(|s| {
+            if s.busy || self.picking.swap(1, Ordering::SeqCst) != 0 {
+                return None;
+            }
+            Some((s.files.get(file_key(kind)).cloned(), s.backup_dir.clone()))
         });
+        let Some((previous, backup_dir)) = choice else { return };
         std::thread::spawn(move || {
-            let d = rfd::FileDialog::new();
+            // Don't leave the shell to reopen its recent location (which can
+            // be an unavailable removable drive or network share). Remember
+            // our own selection, otherwise start in a useful existing folder.
+            // All filesystem checks stay off the UI thread.
+            let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
+            let dir = previous.and_then(|p| p.parent().map(PathBuf::from))
+                .or_else(|| (kind == FileKind::Restore).then_some(backup_dir))
+                .filter(|p| p.is_dir())
+                .or_else(|| home.as_ref().map(|p| p.join("Downloads")).filter(|p| p.is_dir()))
+                .or(home);
+            let d = if let Some(dir) = dir { dialog.set_directory(dir) } else { dialog };
             let d = match kind {
-                FileKind::Restore => d.set_title("Choose a backup").add_filter("Flash backups", &["bin"]).set_directory(&dir),
+                FileKind::Restore => d.set_title("Choose a backup").add_filter("Flash backups", &["bin"]),
                 FileKind::Firmware => d.set_title("Choose a firmware package").add_filter("Firmware packages", &["fwsc"]),
                 FileKind::Stock => d.set_title("Choose an official package (its stock bootloader is used)").add_filter("Firmware packages", &["fwsc"]),
                 FileKind::BootFile => d.set_title("Choose a bootloader file").add_filter("Bootloaders", &["boot"]),
             };
-            let picked = d.add_filter("All files", &["*"]).pick_file();
+            let picked = pick(d.add_filter("All files", &["*"]));
             if let Some(p) = &picked {
                 c.log(format!("{} chosen", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
             }

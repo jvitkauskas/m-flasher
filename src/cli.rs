@@ -316,6 +316,9 @@ fn main(args: Vec<String>) -> Result<(), Error> {
         }
     }
     let cmd = pos.first().cloned().unwrap_or_default();
+    let _instance = crate::instance::acquire()
+        .map_err(|e| Error::Io(format!("cannot check whether M-Flasher is already open: {e}")))?
+        .ok_or_else(|| Error::Refused(crate::instance::ALREADY_OPEN.into()))?;
     // before any command runs, find and download-mode too
     if then_restart && !matches!(cmd.as_str(), "restore" | "firmware" | "bootloader") {
         return Err(Error::Refused(format!("--restart is for restore, firmware and bootloader\n{USAGE}")));

@@ -10,6 +10,7 @@ mod cli;
 mod controller;
 mod fonts;
 mod formats;
+mod instance;
 mod jl;
 mod midi;
 mod ops;
@@ -45,6 +46,19 @@ fn main() {
         eprintln!("cannot open the window: {problem}");
         std::process::exit(1);
     }
+    let _instance = match instance::acquire() {
+        Ok(Some(guard)) => guard,
+        result => {
+            let message = match result {
+                Ok(None) => instance::ALREADY_OPEN.to_string(),
+                Err(e) => format!("Cannot check whether M-Flasher is already open: {e}"),
+                Ok(Some(_)) => unreachable!(),
+            };
+            rfd::MessageDialog::new().set_title("M-Flasher")
+                .set_description(&message).set_level(rfd::MessageLevel::Info).show();
+            return;
+        }
+    };
     if let Err(e) = ui::run() {
         eprintln!("cannot open the window: {e}");
         #[cfg(windows)]
