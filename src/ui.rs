@@ -129,7 +129,7 @@ fn prompt(s: &Shared) -> String {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let st = self.ctl.snapshot();
         let ctx = ui.ctx().clone();
         let screen = ctx.content_rect();
@@ -152,7 +152,8 @@ impl eframe::App for App {
             self.review_when_planned = false;
         }
         let modal = self.dialog != Dialog::None || st.alert.is_some() || st.suggest_boot.is_some();
-        let active = !modal && !busy; // clicks allowed
+        let picking = self.ctl.picking();
+        let active = !modal && !busy && !picking; // clicks allowed
         let clicked = |id: &str, r: Rect| -> (bool, bool) {
             let resp = ui.interact(r, ui.id().with(id), Sense::click());
             (resp.clicked(), resp.hovered())
@@ -316,6 +317,7 @@ impl eframe::App for App {
             let br = board.r(728.0, 655.0, 146.0, 38.0);
             let (c, h) = clicked(id, br);
             key(p, br, false, h && active, !active);
+            let button = if picking && button == "CHOOSE FILE" { "CHOOSING…" } else { button };
             p.text(801.0, 674.0, Align2::CENTER_CENTER, button, "cond", 18.0, KEYINK, 1.6);
             c && active
         };
@@ -365,7 +367,7 @@ impl eframe::App for App {
             }
             (_, Mode::Restore) => {
                 if file_row(&p, "BACKUP FILE", st.file(FileKind::Restore), "CHOOSE FILE", "chooserestore") {
-                    self.ctl.choose_file(FileKind::Restore);
+                    self.ctl.choose_file(FileKind::Restore, rfd::FileDialog::new().set_parent(frame));
                 }
                 let chosen = st.file(FileKind::Restore);
                 for (i, b) in st.backups.iter().take(2).enumerate() {
@@ -394,7 +396,7 @@ impl eframe::App for App {
             }
             (_, Mode::Firmware) => {
                 if file_row(&p, "FIRMWARE FILE", st.file(FileKind::Firmware), "CHOOSE FILE", "choosefw") {
-                    self.ctl.choose_file(FileKind::Firmware);
+                    self.ctl.choose_file(FileKind::Firmware, rfd::FileDialog::new().set_parent(frame));
                 }
                 p.text(56.0, 743.0, Align2::LEFT_CENTER, "The unit's bootloader is kept. To change it, use FLASH BOOTLOADER.", "plex", 14.0, DIM, 0.0);
                 p.text(56.0, 772.0, Align2::LEFT_CENTER, &auto_line, "tech", 13.5, LAV, 2.0);
@@ -436,9 +438,9 @@ impl eframe::App for App {
                         let br = board.r(728.0, 708.0, 146.0, 38.0);
                         let (c, h) = clicked("choosebootfile", br);
                         key(&p, br, false, h && active, !active);
-                        p.text(801.0, 727.0, Align2::CENTER_CENTER, "CHOOSE FILE", "cond", 18.0, KEYINK, 1.6);
+                        p.text(801.0, 727.0, Align2::CENTER_CENTER, if picking { "CHOOSING…" } else { "CHOOSE FILE" }, "cond", 18.0, KEYINK, 1.6);
                         if c && active {
-                            self.ctl.choose_file(kind);
+                            self.ctl.choose_file(kind, rfd::FileDialog::new().set_parent(frame));
                         }
                     }
                 }
